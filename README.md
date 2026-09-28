@@ -1,4 +1,4 @@
-# DSH Connect Qoder / Trae → Pi 移植
+# Pi Connect — Qoder / Trae for Pi
 
 把 DeepSeek Harness 的两个插件移植为 **Pi coding agent** 扩展，直接生效可用：
 
@@ -7,8 +7,8 @@
 | `@eghrhegpe/dsh-connect-qoder` v0.3.2 | `qoder-cn`、`qoder` | 国内版 / 国际版 Qoder 并行 |
 | `dsh-connect-trae` v2.3.1 | `trae`、`trae-global` | 国内版 / 国际版 Trae 并行 |
 
-本仓库是一个 npm workspaces 单仓库，产出两个可发布到 npm 的 Pi 扩展包
-（`@citie114514/dsh-connect-qoder-pi`、`@citie114514/dsh-connect-trae-pi`）。
+本仓库（`pi-connect`）是一个 npm workspaces 单仓库，产出两个可发布到 npm 的 Pi 扩展包
+（`@citie114514/pi-connect-qoder`、`@citie114514/pi-connect-trae`）。
 
 
 ## 工作原理
@@ -30,19 +30,20 @@ Pi 模型运行时（openAI-completions API）
 ## 目录
 
 ```
-pi-extensions/                        (仓库根：npm workspaces)
+pi-connect/                            (仓库根：npm workspaces)
 ├─ package.json          workspaces + pack/publish 脚本
 ├─ .gitignore            node_modules / dist / *.tgz
+├─ .gitattributes        LF 归一
 ├─ LICENSE               MIT（含上游归属说明）
 ├─ README.md             本文件
-├─ dsh-connect-qoder/
+├─ pi-connect-qoder/
 │  ├─ index.js            Pi 扩展入口（注册 qoder-cn / qoder）
 │  ├─ commands.js         /qoder-usage、/qoder-checkin
 │  ├─ package.json        npm 包元数据 + pi.extensions 清单
 │  ├─ README.md           包说明
 │  ├─ THIRD_PARTY_NOTICES.md  上游 MIT 归属
 │  └─ lib/                原插件无依赖协议模块（原样复用）
-├─ dsh-connect-trae/
+├─ pi-connect-trae/
 │  ├─ index.js            Pi 扩展入口（注册 trae / trae-global）
 │  ├─ commands.js         /trae-usage、/trae-checkin
 │  ├─ build-core.mjs      从 DSH bundle 生成 lib/trae-core.js 的构建脚本
@@ -66,10 +67,10 @@ pi-extensions/                        (仓库根：npm workspaces)
 ## 安装
 
 ```powershell
-# 已安装：~/.pi/agent/extensions/{dsh-connect-qoder,dsh-connect-trae}/
-# 重新安装（从本目录）：
-Copy-Item pi-extensions\dsh-connect-qoder  C:\Users\citie\.pi\agent\extensions\dsh-connect-qoder -Recurse -Force
-Copy-Item pi-extensions\dsh-connect-trae   C:\Users\citie\.pi\agent\extensions\dsh-connect-trae  -Recurse -Force
+# 已安装：~/.pi/agent/extensions/{pi-connect-qoder,pi-connect-trae}/
+# 重新安装（从本仓库根目录）：
+Copy-Item pi-connect-qoder  $env:USERPROFILE\.pi\agent\extensions\pi-connect-qoder -Recurse -Force
+Copy-Item pi-connect-trae   $env:USERPROFILE\.pi\agent\extensions\pi-connect-trae  -Recurse -Force
 ```
 
 Pi 启动时自动发现 `~/.pi/agent/extensions/` 下的扩展（目录级 `package.json` 的 `pi.extensions` 清单）。
@@ -80,8 +81,8 @@ Pi 启动时自动发现 `~/.pi/agent/extensions/` 下的扩展（目录级 `pac
 
 ```powershell
 npm run pack          # 在本仓库根目录执行，产物写入 dist/
-pi install npm:@citie114514/dsh-connect-qoder-pi
-pi install npm:@citie114514/dsh-connect-trae-pi
+pi install npm:@citie114514/pi-connect-qoder
+pi install npm:@citie114514/pi-connect-trae
 ```
 
 > **两种方式二选一**：`extensions/` 目录直接安装与 `pi install`（写入 settings.json）同时使用会让
@@ -105,18 +106,18 @@ Pi 没有独立的插件服务器 —— **官方包画廊索引的就是 npm**�
 | `repository` / `homepage` / `bugs` | ✅ 指向本仓库 |
 | scoped 包 `publishConfig.access = public` | ✅ |
 
-发布步骤（需要先登录）：
+**npm 现在强制发布者启用 2FA**：账号若未开 2FA，`npm publish` 会报
+`E403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required`。
+先到 npmjs.com → Account → Two-Factor Authentication 开启（TOTP），然后带一次性码发布：
 
 ```powershell
-gh auth login                 # 首次：登录 GitHub（用 HTTPS 或 SSH）
-gh repo create dsh-connect-pi --public --source=. --remote=origin --push
-
-npm login                     # 首次：登录 npm
-npm run publish:qoder
-npm run publish:trae
+npm run publish:qoder -- --otp=<6位验证码>
+npm run publish:trae  -- --otp=<6位验证码>
 ```
 
-发布成功后画廊会在数分钟内自动收录，用户即可 `pi install npm:@citie114514/dsh-connect-qoder-pi`。
+（替代方案：创建勾选 “Bypass 2FA” 的 granular access token，但 npm 正在收紧该能力。）
+
+发布成功后画廊会在数分钟内自动收录，用户即可 `pi install npm:@citie114514/pi-connect-qoder`。
 
 
 ## 扩展生命周期（遵循 Pi 官方约定）

@@ -1,4 +1,4 @@
-# DSH Connect Qoder — Pi 版
+# Pi Connect Qoder
 
 把本机已登录的 **Qoder**（国内版 Qoder CN / 国际版 Qoder）模型接入 Pi coding agent，零配置即可在
 Pi 的模型列表里使用你的 Qoder 账号额度。
@@ -42,13 +42,13 @@ OSCrypt 密钥），**不写入应用文件、不启动 OAuth**。没有桌面�
 方式一 —— 直接放进 Pi 的扩展目录（推荐，自动发现）：
 
 ```powershell
-Copy-Item <本包目录> $env:USERPROFILE\.pi\agent\extensions\dsh-connect-qoder -Recurse
+Copy-Item <本包目录> $env:USERPROFILE\.pi\agent\extensions\pi-connect-qoder -Recurse
 ```
 
 方式二 —— 用 npm 源安装：
 
 ```powershell
-pi install npm:@eghrhegpe/dsh-connect-qoder-pi
+pi install npm:@citie114514/pi-connect-qoder
 ```
 
 > 两种方式**不要同时使用**，否则供应商会注册两次。

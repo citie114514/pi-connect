@@ -1,7 +1,7 @@
 {
-  "name": "@citie114514/dsh-connect-qoder-pi",
+  "name": "@citie114514/pi-connect-qoder",
   "version": "0.3.2",
-  "displayName": "DSH Connect Qoder (Pi port)",
+  "displayName": "Pi Connect Qoder",
   "description": "将本机已登录的 Qoder（国内版 Qoder CN / 国际版 Qoder）模型接入 Pi coding agent，零配置；复用 DSH 插件的凭据读取、回环 shim、上游协议与目录逻辑，附额度查看与每日签到命令。",
   "type": "module",
   "license": "MIT",
@@ -34,12 +34,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/citie114514/dsh-connect-pi.git",
-    "directory": "dsh-connect-qoder"
+    "url": "git+https://github.com/citie114514/pi-connect.git",
+    "directory": "pi-connect-qoder"
   },
-  "homepage": "https://github.com/citie114514/dsh-connect-pi/tree/main/dsh-connect-qoder#readme",
+  "homepage": "https://github.com/citie114514/pi-connect/tree/main/pi-connect-qoder#readme",
   "bugs": {
-    "url": "https://github.com/citie114514/dsh-connect-pi/issues"
+    "url": "https://github.com/citie114514/pi-connect/issues"
   },
   "publishConfig": {
     "access": "public"

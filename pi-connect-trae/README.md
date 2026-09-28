@@ -1,4 +1,4 @@
-# DSH Connect Trae — Pi 版
+# Pi Connect Trae
 
 把本机已登录的 **Trae**（国内版 / 国际版）模型接入 Pi coding agent，国内版与国际版双供应商并行，
 并提供额度查看与每日签到命令。
@@ -40,13 +40,13 @@ Pi 模型运行时（openai-completions API）
 方式一 —— 直接放进 Pi 的扩展目录（推荐，自动发现）：
 
 ```powershell
-Copy-Item <本包目录> $env:USERPROFILE\.pi\agent\extensions\dsh-connect-trae -Recurse
+Copy-Item <本包目录> $env:USERPROFILE\.pi\agent\extensions\pi-connect-trae -Recurse
 ```
 
 方式二 —— 用 npm 源安装：
 
 ```powershell
-pi install npm:dsh-connect-trae-pi
+pi install npm:@citie114514/pi-connect-trae
 ```
 
 > 两种方式**不要同时使用**，否则供应商会注册两次。
