@@ -1,0 +1,48 @@
+{
+  "name": "@citie114514/dsh-connect-trae-pi",
+  "version": "2.3.1",
+  "displayName": "DSH Connect Trae (Pi port)",
+  "description": "将本机已登录的 Trae（国内版 / 国际版）模型接入 Pi coding agent，国内版与国际版双供应商并行；附额度查看与每日签到命令，复用 DSH 插件的协议与凭据逻辑。",
+  "type": "module",
+  "license": "MIT",
+  "author": "dingminhua (Pi port by citie114514)",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "dsh-plugin",
+    "trae",
+    "model-provider"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "files": [
+    "index.js",
+    "commands.js",
+    "lib",
+    "build-core.mjs",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/citie114514/dsh-connect-pi.git",
+    "directory": "dsh-connect-trae"
+  },
+  "homepage": "https://github.com/citie114514/dsh-connect-pi/tree/main/dsh-connect-trae#readme",
+  "bugs": {
+    "url": "https://github.com/citie114514/dsh-connect-pi/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

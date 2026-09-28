@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Packed tarballs (built artifacts, not sources)
+dist/
+*.tgz
+
+# Local staging / scratch
+.stage*/
+.hold*/
+.tgzcheck/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log

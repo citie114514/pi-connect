@@ -1,0 +1,27 @@
+{
+  "name": "dsh-connect-pi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pi coding agent ports of the DeepSeek Harness plugins dsh-connect-qoder and dsh-connect-trae: bring your locally signed-in Qoder / Trae accounts into Pi as model providers, with usage and daily check-in commands.",
+  "license": "MIT",
+  "author": "citie114514",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/citie114514/dsh-connect-pi.git"
+  },
+  "type": "module",
+  "workspaces": [
+    "dsh-connect-qoder",
+    "dsh-connect-trae"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "pack": "npm pack --workspaces --pack-destination dist",
+    "pack:qoder": "npm pack -w @citie114514/dsh-connect-qoder-pi --pack-destination dist",
+    "pack:trae": "npm pack -w @citie114514/dsh-connect-trae-pi --pack-destination dist",
+    "publish:qoder": "npm publish -w @citie114514/dsh-connect-qoder-pi --access public",
+    "publish:trae": "npm publish -w @citie114514/dsh-connect-trae-pi --access public"
+  }
+}
