@@ -1,0 +1,12 @@
+{
+  "name": "ide-account-bridge-src",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/entry.js --bundle --platform=node --format=cjs --target=node22 --outfile=dist/index.cjs --external:electron --legal-comments=none"
+  },
+  "devDependencies": {
+    "@playa0v0/cyrene-plugin-sdk": "^0.2.0"
+  }
+}
