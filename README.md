@@ -117,6 +117,15 @@ npm run publish:trae  -- --otp=<6位验证码>
 
 （替代方案：创建勾选 “Bypass 2FA” 的 granular access token，但 npm 正在收紧该能力。）
 
+**发布前先验证凭据。** `npm whoami` 返回 `E401` 说明本地 token 已失效（过期 / 被撤销 / 权限不足）。
+此时 `npm publish` 会以**匿名**身份发出，被 registry 以 **E404 Not Found** 拒绝 —— npm 对无权写入的
+scoped 包返回 404 而不是 401，极易误判成“包名不存在”而白折腾半天。**先修认证，再怀疑包名。**
+
+**Trusted Publishing（OIDC）救不了首次发布。** npm 的可信发布者配置入口在「包的设置页」，
+而包必须先存在才有设置页。所以首次发布仍须用传统凭据（granular token 或 `--otp` 一次性码）；
+OIDC 只适用于后续版本。首次发布成功后，再为这两个包配置 GitHub Actions 可信发布者，
+之后即可免 token 自动发布，并自动附带 provenance 签名。
+
 发布成功后画廊会在数分钟内自动收录，用户即可 `pi install npm:@citie114514/pi-connect-qoder`。
 
 
