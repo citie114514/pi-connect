@@ -1,6 +1,6 @@
 {
   "name": "@citie114514/pi-connect-qoder",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "displayName": "Pi Connect Qoder",
   "description": "将本机已登录的 Qoder（国内版 Qoder CN / 国际版 Qoder）模型接入 Pi coding agent，零配置；复用 DSH 插件的凭据读取、回环 shim、上游协议与目录逻辑，附额度查看与每日签到命令。",
   "type": "module",

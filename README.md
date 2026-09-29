@@ -25,7 +25,7 @@ Pi 模型运行时（openAI-completions API）
 - **凭据**：读取本机 Qoder / Trae 桌面应用自己的登录（OSCrypt/DPAPI、storage.json），零配置，不写应用文件，不启动 OAuth。
 - **认证**：`auth.apiKey.check()` 只认已登录的区域（未登录的区域不出现）；`auth.apiKey.resolve()` 每次请求把 shim 的 bearer token 交给 Pi。Qoder/Trae 的真实令牌从不进入 Pi。
 - **目录**：`refreshModels()` 拉取实时模型目录；失败时保留磁盘缓存的最后一份（Qoder CatalogStore / Trae 静态 fallback）。
-- **推理档位**：保留了 DSH 插件的关键决策 —— `compat.supportsDeveloperRole: false`（Qoder 不接受 developer 角色）、不声明 `maxTokens` 输出上限（pi-ai 只发 `options.maxTokens`，模型字段仅作思考预算上限，广告为 contextWindow 以兼容 `--list-models` 显示）。
+- **推理档位**：保留了 DSH 插件的关键决策 —— `compat.supportsDeveloperRole: false`（Qoder 不接受 developer 角色，缺了它每个请求都会 403 并报一个虚构的「排队中」错误），以及 Qoder 侧**刻意不声明 `maxTokens`**（声明后 pi-ai 会把它作为输出上限发成 `max_tokens`，推理与回答共用该预算会截断长回复），只广告 `contextWindow` 供 `--list-models` 显示。
 
 ## 目录
 
@@ -208,5 +208,10 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
   逻辑与守卫完整保留；
 - Trae 的 Raw Chat 回退通道未接线（协议核心仍在 `lib/trae-core.js`，需要时可再补）；
 - 插件自有凭据副本落在 `~/.pi/agent/cache/<name>/`；
-- 模型描述符额外广告 `maxTokens`：Pi 的 `--list-models` 不做 undefined 保护，而该字段只约束
-  思考预算（请求上限走 `options.maxTokens`），因此不会截断回复。
+- **输出上限（`maxTokens`）两个包处理相反，各自继承对应 DSH 插件的原决策**：
+  - `pi-connect-trae` **广告** `maxTokens = contextWindow`。Pi 的 `--list-models` 不做 undefined
+    保护，而该字段只约束思考预算（请求上限走 `options.maxTokens`），因此展示安全、不截断回复。
+  - `pi-connect-qoder` **刻意不声明**。其推理与回答共用输出预算，声明会让 pi-ai 把它发成
+    `max_tokens` 从而截断长回复，所以只广告 `contextWindow`。
+  - 此前 README 把这条笼统写成「额外广告 `maxTokens`」，对 Qoder 侧是错的（代码一直正确），
+    0.3.3 已修正。

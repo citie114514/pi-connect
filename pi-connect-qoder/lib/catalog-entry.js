@@ -24,6 +24,21 @@ import { unwrapVolatile } from './volatile.js'
 /**
  * A model id is the catalog display name with whitespace removed, so the id is
  * stable and readable; the upstream key is tracked beside it for the wire.
+ *
+ * "Stable" is relative, and the alternatives here were measured rather than
+ * assumed. The catalog's own `key` is an internal alias, not an identifier: the
+ * live CN directory returns `qmodel_latest` for Qwen3.7-Max and `kmodel_latest`
+ * for Kimi-K3, names that are rolling by construction and would therefore drift
+ * *more* silently than a display name. Hard-coding slugs — the approach one
+ * downstream fork took — buys absolute stability at the price of a
+ * hand-maintained model table: a model Qoder adds stays unreachable until the
+ * package is re-released. A display name is a versioned product name
+ * (`Qwen3.8-Max`, `GLM-5.3`) that changes rarely, and new models arrive as
+ * *new* ids rather than as renames, so deriving from it is the option that
+ * needs neither maintenance nor a release to follow upstream.
+ *
+ * The failure mode that remains is a hand-typed allow-list entry not matching
+ * the derived id; {@link filterByEnabled} absorbs it.
  */
 function modelIdFor(entry) {
   return (entry.display_name || 'QoderModel').replace(/\s+/g, '')
@@ -109,8 +124,25 @@ export function normalizeEntry(entry) {
 export function filterByEnabled(models, enabled) {
   const list = Array.isArray(enabled) ? enabled.filter((id) => typeof id === 'string' && id.length > 0) : []
   if (list.length === 0) return models
-  const allowed = new Set(list)
-  return models.filter((entry) => allowed.has(entry.id))
+  const allowed = new Set(list.map(normalizeModelId))
+  return models.filter((entry) => allowed.has(normalizeModelId(entry.id)))
+}
+
+/**
+ * Normalise a model id for allow-list comparison.
+ *
+ * Ids are display names with whitespace removed (`DeepSeek-Flash`) while the
+ * allow-list is hand-written in `settings.json`. Someone who types
+ * `deepseek-flash`, `DeepSeek Flash`, or `deepseekflash` means the same model,
+ * but a plain `Set.has` answers no — and the only symptom is that the model
+ * silently disappears from the picker, with nothing on screen to explain it.
+ * Case and separators must therefore not decide membership.
+ *
+ * Only the comparison is normalised: the ids that get stored, displayed, and
+ * routed stay verbatim.
+ */
+function normalizeModelId(id) {
+  return String(id).toLowerCase().replace(/[\s\-_.]/g, '')
 }
 
 /**
