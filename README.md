@@ -128,6 +128,30 @@ OIDC 只适用于后续版本。首次发布成功后，再为这两个包配置
 
 发布成功后画廊会在数分钟内自动收录，用户即可 `pi install npm:@citie114514/pi-connect-qoder`。
 
+### 发布状态（2026-09-29）
+
+两个包均已发布到 npm，并被 Pi 官方画廊自动收录：
+
+| 包 | 版本 | npm | Pi 画廊 |
+| --- | --- | --- | --- |
+| `@citie114514/pi-connect-qoder` | 0.3.2 | [npm](https://www.npmjs.com/package/@citie114514/pi-connect-qoder) | [pi.dev/packages](https://pi.dev/packages/@citie114514/pi-connect-qoder) |
+| `@citie114514/pi-connect-trae` | 2.3.1 | [npm](https://www.npmjs.com/package/@citie114514/pi-connect-trae) | [pi.dev/packages](https://pi.dev/packages/@citie114514/pi-connect-trae) |
+
+```powershell
+pi install npm:@citie114514/pi-connect-qoder
+pi install npm:@citie114514/pi-connect-trae
+```
+
+**验证 npm 上的包本身**（而不是 `extensions/` 目录里的工作副本）：用 `-ne` 禁用本地扩展发现，
+只加载指定的 npm 源。已实测两个包均能正确注册全部供应商：
+
+```powershell
+pi -ne -e npm:@citie114514/pi-connect-qoder --list-models   # qoder-cn 14 + qoder 2
+pi -ne -e npm:@citie114514/pi-connect-trae  --list-models   # trae 4
+```
+
+> 画廊首页只列下载量最高的前 50 个包，新包不会出现在首页；详情页与 `pi install` 均可正常访问。
+
 
 ## 扩展生命周期（遵循 Pi 官方约定）
 
