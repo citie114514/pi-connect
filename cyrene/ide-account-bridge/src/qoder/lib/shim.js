@@ -127,6 +127,12 @@ export function createQoderShim(options) {
     invalidateCredential,
     region,
     logger,
+    // Endpoint stability. Both are optional so the Pi port keeps its original
+    // per-process behaviour; Cyrene persists them so a model profile survives a
+    // restart. `preferredPort` is only a preference — a busy port falls back to
+    // a random one rather than failing activation.
+    secret: injectedSecret,
+    preferredPort,
     // The upstream call, injectable so a test can force a queue rejection (or
     // any other failure) without reaching the real gateway. Everything else the
     // shim does is observable over HTTP, but no test can ask Qoder to be busy
@@ -134,7 +140,9 @@ export function createQoderShim(options) {
     // of regression that would ship unnoticed.
     runChat = streamChat,
   } = options
-  const SHARED_SECRET = randomBytes(32).toString('base64url')
+  const SHARED_SECRET = typeof injectedSecret === 'string' && injectedSecret.length > 0
+    ? injectedSecret
+    : randomBytes(32).toString('base64url')
 
   /** Constant-time bearer check. */
   function bearerOk(req) {
@@ -155,11 +163,37 @@ export function createQoderShim(options) {
     })
   })
 
-  const ready = new Promise((resolve, reject) => {
-    server.once('listening', () => resolve())
-    server.once('error', reject)
+  const attemptBind = (port) => new Promise((resolve, reject) => {
+    const onListening = () => {
+      server.removeListener('error', onError)
+      resolve()
+    }
+    const onError = (error) => {
+      server.removeListener('listening', onListening)
+      reject(error)
+    }
+    server.once('listening', onListening)
+    server.once('error', onError)
+    server.listen(port, '127.0.0.1')
   })
-  server.listen(0, '127.0.0.1')
+  const ready = (async () => {
+    const preferred = typeof preferredPort === 'number' && Number.isInteger(preferredPort) && preferredPort > 0
+      ? preferredPort
+      : 0
+    if (preferred === 0) {
+      await attemptBind(0)
+      return
+    }
+    try {
+      await attemptBind(preferred)
+    } catch (error) {
+      // Only a taken port is worth retrying; anything else (permissions, a bad
+      // address) would fail the same way on a random port.
+      if (error?.code !== 'EADDRINUSE') throw error
+      logger?.warn?.(`dsh-connect-qoder: 端口 ${preferred} 已被占用，改用随机端口（模型档案里的 Base URL 需要更新）`)
+      await attemptBind(0)
+    }
+  })()
   // Pi port note: the shim is an in-process convenience, so it must never be
   // what keeps the process alive. `unref()` lets a session-less invocation
   // (e.g. `pi --list-models`, `pi config`) exit even though the shim is

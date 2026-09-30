@@ -47,7 +47,11 @@ const REGION_KEYS = ["cn", "ai"];
  * One region's stack: credential store, catalog, shim, upstream bridge.
  */
 class RegionStack {
-  constructor(region, logger) {
+  constructor(region, logger, cacheRoot, endpoints, portIndex = 0) {
+    // `cacheRoot` is unused here (Trae keeps its own dir via `setTraeOwnDir`),
+    // but the parameter is kept so the positional shape matches the factory.
+    this.endpoints = endpoints;
+    this.portIndex = portIndex;
     this.region = region;
     this.logger = logger;
     this.catalog = new TraeCatalog(region);
@@ -100,6 +104,14 @@ class RegionStack {
       catalog: this.catalog,
       client: this.delegating,
       logger: this.logger,
+      // Absent on the Pi port, which keeps its original random-per-process
+      // behaviour.
+      ...this.endpoints === undefined
+        ? {}
+        : {
+            secret: this.endpoints.tokenFor(this.region),
+            preferredPort: this.endpoints.preferredPortFor(this.region, this.portIndex),
+          },
     });
     return this.shim;
   }
@@ -108,6 +120,12 @@ class RegionStack {
   async ensureShim() {
     const shim = this.startShim();
     await shim.ready;
+    if (this.endpoints !== undefined) {
+      // Record what actually bound: a taken preferred port falls back to a
+      // random one, and the next start should prefer that instead.
+      const port = Number(new URL(shim.baseUrl()).port);
+      if (Number.isInteger(port) && port > 0) this.endpoints.recordPort(this.region, port);
+    }
     return shim;
   }
 
@@ -207,11 +225,11 @@ class RegionStack {
  * A region with no signed-in account is skipped silently: it would only ever
  * answer 401 and would put a dead route in front of the user.
  */
-export async function createTraeStacks({ cacheRoot, logger }) {
+export async function createTraeStacks({ cacheRoot, logger, endpoints }) {
   if (cacheRoot !== undefined) setTraeOwnDir(cacheRoot);
   const stacks = [];
-  for (const region of REGION_KEYS) {
-    const stack = new RegionStack(region, logger, cacheRoot);
+  for (const [index, region] of REGION_KEYS.entries()) {
+    const stack = new RegionStack(region, logger, cacheRoot, endpoints, index);
     stack.catalog.set(fallbackModelsFor(region));
     stacks.push(stack);
   }

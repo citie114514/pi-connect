@@ -1553,7 +1553,13 @@ function readBody(req) {
 	});
 }
 function createTraeShim(options) {
-	const secret = randomBytes(32).toString("base64url");
+	// Endpoint stability. Both are optional so the Pi port keeps its original
+	// per-process behaviour; Cyrene persists them so a model profile survives a
+	// restart. `preferredPort` is only a preference — a busy port falls back to
+	// a random one rather than failing activation.
+	const injectedSecret = options?.["secret"];
+	const preferredPort = options?.["preferredPort"];
+	const secret = typeof injectedSecret === "string" && injectedSecret.length > 0 ? injectedSecret : randomBytes(32).toString("base64url");
 	const sockets = /* @__PURE__ */ new Set();
 	const server = createServer((req, res) => {
 		handle(req, res);
@@ -1562,11 +1568,35 @@ function createTraeShim(options) {
 		sockets.add(socket);
 		socket.once("close", () => sockets.delete(socket));
 	});
-	const ready = new Promise((resolve, reject) => {
-		server.once("listening", resolve);
-		server.once("error", reject);
+	const attemptBind = (port) => new Promise((resolve, reject) => {
+		const onListening = () => {
+			server.removeListener("error", onError);
+			resolve();
+		};
+		const onError = (error) => {
+			server.removeListener("listening", onListening);
+			reject(error);
+		};
+		server.once("listening", onListening);
+		server.once("error", onError);
+		server.listen(port, "127.0.0.1");
 	});
-	server.listen(0, "127.0.0.1");
+	const ready = (async () => {
+		const preferred = typeof preferredPort === "number" && Number.isInteger(preferredPort) && preferredPort > 0 ? preferredPort : 0;
+		if (preferred === 0) {
+			await attemptBind(0);
+			return;
+		}
+		try {
+			await attemptBind(preferred);
+		} catch (error) {
+			// Only a taken port is worth retrying; anything else would fail the
+			// same way on a random port.
+			if (error?.["code"] !== "EADDRINUSE") throw error;
+			options?.logger?.warn?.(`dsh-connect-trae: 端口 ${preferred} 已被占用，改用随机端口（模型档案里的 Base URL 需要更新）`);
+			await attemptBind(0);
+		}
+	})();
 	// Pi port: never let the shim's listener hold the process open.
 	server.unref();
 	function bearerOk(req) {

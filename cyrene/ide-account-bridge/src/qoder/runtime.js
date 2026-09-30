@@ -36,10 +36,14 @@ export const PROVIDER_IDS = ["qoder-cn", "qoder"];
  * One region's runtime: credential cache + catalog + shim + provider state.
  */
 class RegionRuntime {
-  constructor(region, logger, cacheRoot) {
+  constructor(region, logger, cacheRoot, endpoints, portIndex = 0) {
     this.region = region;
     this.logger = logger;
     this.cacheRoot = cacheRoot;
+    // Optional: when absent the shim keeps its original random-per-process
+    // behaviour, which is what the Pi port relies on.
+    this.endpoints = endpoints;
+    this.portIndex = portIndex;
     this.credentials = new CredentialCache({
       loadApp: () => loadCredential(region, process.env.APPDATA ?? ""),
       loadEnv: () => loadEnvCredential(region),
@@ -65,6 +69,12 @@ class RegionRuntime {
       resolveEnabledIds: () => [],
       invalidateCredential: () => this.credentials.invalidate(),
       logger: this.logger,
+      ...this.endpoints === undefined
+        ? {}
+        : {
+            secret: this.endpoints.tokenFor(this.region.id),
+            preferredPort: this.endpoints.preferredPortFor(this.region.id, this.portIndex),
+          },
     });
     return this.shim;
   }
@@ -73,6 +83,12 @@ class RegionRuntime {
   async ensureShim() {
     const shim = this.startShim();
     await shim.ready;
+    if (this.endpoints !== undefined) {
+      // Read the address only after `ready`: before the listener is up,
+      // `server.address()` is null and `baseUrl()` throws.
+      const port = Number(new URL(shim.baseUrl()).port);
+      if (Number.isInteger(port) && port > 0) this.endpoints.recordPort(this.region.id, port);
+    }
     return shim;
   }
 
@@ -137,14 +153,14 @@ class RegionRuntime {
  * base URL the moment the user opens it, so deferring to the first request
  * would leave an empty panel until something else happened to trigger one.
  */
-export async function createQoderRuntimes({ cacheRoot, logger }) {
+export async function createQoderRuntimes({ cacheRoot, logger, endpoints }) {
   setCredentialDiagnosticSink((message) => logger.warn(message));
   try {
     sweepStaleOscryptDirs();
   } catch {
     // Housekeeping only; never blocks startup.
   }
-  return REGIONS.map((region) => new RegionRuntime(region, logger, cacheRoot));
+  return REGIONS.map((region, index) => new RegionRuntime(region, logger, cacheRoot, endpoints, index));
 }
 
 export { RegionRuntime, REGIONS };

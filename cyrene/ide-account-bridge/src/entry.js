@@ -32,6 +32,7 @@
  * @module ide-account-bridge
  */
 import { join } from 'node:path'
+import { createEndpointStore } from './endpoints.js'
 import { createQoderRuntimes } from './qoder/runtime.js'
 import { createTraeStacks } from './trae/runtime.js'
 import { qoderUsage, qoderCheckin } from './qoder/ops.js'
@@ -194,13 +195,19 @@ const plugin = {
     let traeStacks = []
     let winManager = null
 
+    // Ports and bearer tokens are persisted so a model profile keeps working
+    // across restarts. The Pi port mints both per process, which is fine for a
+    // session-scoped host but not for Cyrene, where the endpoint is copied into
+    // a durable model profile.
+    const endpoints = createEndpointStore({ path: join(cacheRoot, 'endpoints.json'), logger })
+
     try {
-      qoderRuntimes = await createQoderRuntimes({ cacheRoot: join(cacheRoot, 'qoder'), logger })
+      qoderRuntimes = await createQoderRuntimes({ cacheRoot: join(cacheRoot, 'qoder'), logger, endpoints })
     } catch (error) {
       logger.error('Qoder 运行时初始化失败', error instanceof Error ? error.message : String(error))
     }
     try {
-      traeStacks = await createTraeStacks({ cacheRoot: join(cacheRoot, 'trae'), logger })
+      traeStacks = await createTraeStacks({ cacheRoot: join(cacheRoot, 'trae'), logger, endpoints })
     } catch (error) {
       logger.error('Trae 运行时初始化失败', error instanceof Error ? error.message : String(error))
     }
