@@ -1616,6 +1616,99 @@ function createTraeShim(options) {
 				req.socket.once("close", abort);
 				const result = await options.client.chatStream(raw, controller.signal);
 				if (!result.ok) return writeError(res, STATUS_BY_KIND[result.kind], result.kind, result.message);
+				// Non-streaming callers get one JSON body, not SSE. This branch is
+				// what the Qoder shim already had; without it a client that sends
+				// `stream: false` (or omits it) receives `data: {...}` and fails
+				// with "Unexpected token 'd'" while trying to parse it as JSON.
+				if (parsed.stream !== true) {
+					// `options.client.chatStream()` already answers OpenAI-compatible
+					// SSE (`bridgeTraeSoloStream` did the Trae -> OpenAI conversion), so
+					// this aggregates those chunks directly. Parsing them as raw Trae
+					// events would silently drop every token.
+					const textDecoder = new TextDecoder();
+					const textParts = [];
+					const reasoningParts = [];
+					const toolCallMap = new Map();
+					let finishReason = "stop";
+					let usage;
+					const absorbChunk = (chunk) => {
+						if (chunk !== null && typeof chunk === "object" && chunk["usage"] !== void 0 && chunk["usage"] !== null) usage = chunk["usage"];
+						const choice = Array.isArray(chunk?.["choices"]) ? chunk["choices"][0] : void 0;
+						if (choice === void 0) return;
+						const delta = choice["delta"];
+						if (delta !== null && typeof delta === "object") {
+							if (typeof delta["content"] === "string" && delta["content"] !== "") textParts.push(delta["content"]);
+							if (typeof delta["reasoning_content"] === "string" && delta["reasoning_content"] !== "") reasoningParts.push(delta["reasoning_content"]);
+							if (Array.isArray(delta["tool_calls"])) {
+								for (const call of delta["tool_calls"]) {
+									if (call === null || typeof call !== "object") continue;
+									const index = typeof call["index"] === "number" ? call["index"] : toolCallMap.size;
+									const existing = toolCallMap.get(index) ?? {
+										id: void 0,
+										type: "function",
+										function: { name: "", arguments: "" }
+									};
+									if (typeof call["id"] === "string" && call["id"] !== "") existing.id = call["id"];
+									if (typeof call["type"] === "string" && call["type"] !== "") existing.type = call["type"];
+									const fn = call["function"];
+									if (fn !== null && typeof fn === "object") {
+										// The name arrives whole on the first delta; only the arguments
+										// are split across deltas, so they accumulate.
+										if (typeof fn["name"] === "string" && fn["name"] !== "" && existing["function"].name === "") existing["function"].name = fn["name"];
+										if (typeof fn["arguments"] === "string" && fn["arguments"] !== "") existing["function"].arguments += fn["arguments"];
+									}
+									toolCallMap.set(index, existing);
+								}
+							}
+						}
+						if (typeof choice["finish_reason"] === "string" && choice["finish_reason"] !== "") finishReason = choice["finish_reason"];
+					};
+					let upstreamError;
+					try {
+						let buffer = "";
+						const absorbLine = (line) => {
+							const trimmed = line.trim();
+							if (!trimmed.startsWith("data:")) return;
+							const payload = trimmed.slice(5).trim();
+							if (payload === "" || payload === "[DONE]") return;
+							try {
+								absorbChunk(JSON.parse(payload));
+							} catch {
+								// A malformed frame is skipped rather than failing the whole
+								// response; the caller still gets whatever streamed cleanly.
+							}
+						};
+						for await (const piece of Readable.fromWeb(result.response.body)) {
+							buffer += textDecoder.decode(piece, { stream: true });
+							const lines = buffer.split("\n");
+							buffer = lines.pop() ?? "";
+							for (const line of lines) absorbLine(line);
+						}
+						if (buffer !== "") absorbLine(buffer);
+					} catch (error) {
+						upstreamError = error instanceof Error ? error : new Error(String(error));
+					}
+					if (upstreamError !== void 0) return writeError(res, 502, "upstream_error", upstreamError.message);
+					const message = { role: "assistant", content: textParts.join("") };
+					if (reasoningParts.length > 0) message["reasoning_content"] = reasoningParts.join("");
+					if (toolCallMap.size > 0) {
+						message["tool_calls"] = [...toolCallMap.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => ({
+							...call.id === void 0 ? {} : { id: call.id },
+							type: call.type,
+							function: call["function"]
+						}));
+						if (finishReason === "stop") finishReason = "tool_calls";
+					}
+					return writeJson(res, 200, {
+						id: `chatcmpl-${randomBytes(8).toString("hex")}`,
+						object: "chat.completion",
+						created: Math.floor(Date.now() / 1e3),
+						model: typeof parsed.model === "string" ? parsed.model : "",
+						choices: [{ index: 0, message, finish_reason: finishReason }],
+						// Absent beats fabricated: a zero would read as "this turn cost nothing".
+						...usage === void 0 ? {} : { usage }
+					});
+				}
 				res.writeHead(200, {
 					"Content-Type": "text/event-stream",
 					"Cache-Control": "no-cache",
