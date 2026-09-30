@@ -75,7 +75,7 @@ function probeDirs(region, appDataRoot) {
  *   where `identity` is `{ name, email, expiresAt? }` or `undefined`, and
  *   carries no credential material of any kind.
  */
-export function readAccountState(region, appDataRoot, options = {}) {
+export async function readAccountState(region, appDataRoot, options = {}) {
   const loadCred = options.loadCredential ?? loadCredential
   const loadEnv = options.loadEnvCredential ?? loadEnvCredential
   const unwrapFailure = options.describeUnwrapFailure ?? readUnwrapFailure
@@ -86,7 +86,7 @@ export function readAccountState(region, appDataRoot, options = {}) {
     manageUrl: region.manageUrl,
   }
 
-  const credential = loadCred(region, appData) ?? loadEnv(region)
+  const credential = (await loadCred(region, appData)) ?? (await loadEnv(region))
   if (credential !== undefined) {
     const identity = {
       name: typeof credential.name === 'string' ? credential.name : '',

@@ -1601,7 +1601,7 @@ function createTraeShim(options) {
 					return writeError(res, 400, "invalid_json", "Request body must be valid JSON");
 				}
 				const parsed = JSON.parse(raw);
-				options.logger?.warn("dsh-connect-trae: chat request received", {
+				options.logger?.info("dsh-connect-trae: chat request received", {
 					model: parsed.model,
 					messages: Array.isArray(parsed.messages) ? parsed.messages.map((message) => typeof message === "object" && message !== null ? message["role"] ?? "?" : "?") : "(none)",
 					toolCount: Array.isArray(parsed.tools) ? parsed.tools.length : 0,

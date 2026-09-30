@@ -85,6 +85,19 @@ export const QUEUE_WAIT_MIN_SLEEP_MS = 1000
  */
 const ATTEMPT_TIMEOUT_MS = 60000
 
+/**
+ * Deadline for one catalog fetch, applied when the caller passes no signal.
+ *
+ * Shorter than the chat attempt budget on purpose: this is a small JSON request
+ * on a *startup* path, and the host runs plugin activation inside one global
+ * serial queue. A caller that forgets its signal must therefore not be able to
+ * pin that queue — a black-holed gateway (firewall, corporate proxy, no route)
+ * would otherwise leave the plugin manager unresponsive, not just this plugin
+ * without models. `fetchModels` had no timeout at all, which is exactly how the
+ * Cyrene port shipped that bug.
+ */
+const CATALOG_TIMEOUT_MS = 30000
+
 /** Abortable sleep; resolves early (without throwing) when the signal aborts. */
 function sleep(ms, signal) {
   return new Promise((resolve) => {
@@ -370,8 +383,17 @@ export function openApiHeaders(credential, region) {
   }
 }
 
-/** One cached umid read per process: the binary is slow enough to matter, cheap enough to run once. */
-let umidInfo
+/**
+ * One cached umid read **per region**: the binary is slow enough to matter,
+ * cheap enough to run once — but only once *per install root*.
+ *
+ * A single shared slot was wrong: the candidate roots differ by region (only
+ * `qoder-cn` also probes `%LOCALAPPDATA%\Programs\QoderCN`), so whichever
+ * region happened to ask first decided the answer for both — including caching
+ * a `null` from a region whose install root has no binary, which then
+ * suppressed a successful read from the other one for the rest of the process.
+ */
+const umidInfoByRegion = new Map()
 
 /**
  * Test seam: a global function, when present, replaces the binary read
@@ -403,7 +425,7 @@ function umidProbe() {
  * invokes it between cases because the cache lives in module scope.
  */
 export function __dshQoderUmidCacheReset() {
-  umidInfo = undefined
+  umidInfoByRegion.clear()
 }
 
 /**
@@ -415,7 +437,7 @@ export function __dshQoderUmidCacheReset() {
  * campaigns never needed them — but reading them when absent (CN-only
  * installs) must stay a no-op, never a failure.
  *
- * The resolution is cached per process in `umidInfo`; the test seam
+ * The resolution is cached per region in `umidInfoByRegion`; the test seam
  * `__dshQoderUmidProbe` and the reset hook `__dshQoderUmidCacheReset` let
  * the unit tests drive every branch without a real install.
  *
@@ -423,12 +445,17 @@ export function __dshQoderUmidCacheReset() {
  * @returns `{ 'Cosy-MachineToken', 'Cosy-MachineCode', 'Cosy-MachineType' }` or `{}`.
  */
 function umidHeadersFor(region) {
-  if (umidInfo === undefined) umidInfo = readUmidInfo(region)
-  if (umidInfo === null) return {}
+  const key = region?.id ?? ''
+  let info = umidInfoByRegion.get(key)
+  if (info === undefined) {
+    info = readUmidInfo(region)
+    umidInfoByRegion.set(key, info)
+  }
+  if (info === null) return {}
   return {
-    'Cosy-MachineToken': umidInfo.machineToken,
-    'Cosy-MachineCode': umidInfo.machineCode,
-    'Cosy-MachineType': umidInfo.machineType,
+    'Cosy-MachineToken': info.machineToken,
+    'Cosy-MachineCode': info.machineCode,
+    'Cosy-MachineType': info.machineType,
   }
 }
 
@@ -807,7 +834,8 @@ export async function fetchModels(region, credential, signal) {
     method: 'GET',
     headers: { Accept: 'application/json', ...headers },
     redirect: 'error',
-    signal,
+    // Never `undefined`: an unbounded fetch here can outlive the caller.
+    signal: signal ?? AbortSignal.timeout(CATALOG_TIMEOUT_MS),
   })
   if (!response.ok) {
     throw new Error(`Qoder model list failed: HTTP ${response.status} ${(await response.text()).slice(0, 300)}`)

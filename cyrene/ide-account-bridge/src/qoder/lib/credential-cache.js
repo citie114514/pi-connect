@@ -18,8 +18,8 @@ import { isCredentialUsable } from './credentials.js'
 
 export class CredentialCache {
   /**
-   * @param options.loadApp - `() => credential | undefined`, reading the app's store.
-   * @param options.loadEnv - `() => credential | undefined`, the PAT fallback.
+   * @param options.loadApp - `() => credential | undefined | Promise<...>`, reading the app's store.
+   * @param options.loadEnv - `() => credential | undefined | Promise<...>`, the PAT fallback.
    * @param options.exchangePat - `(credential) => { token, refreshToken, expiresAt }`,
    *   called only for a PAT source; absent when PATs are not supported.
    */
@@ -69,8 +69,11 @@ export class CredentialCache {
     if (isCredentialUsable(this.cached)) return this.cached
 
     this.reads += 1
-    const fromApp = this.loadApp()
-    const credential = fromApp ?? this.loadEnv()
+    // Both readers may be async: `loadCredential` spawns a helper process, so
+    // it returns a promise. Missing the await here would make `fromApp` a
+    // always-truthy promise and quietly bypass the env fallback.
+    const fromApp = await this.loadApp()
+    const credential = fromApp ?? (await this.loadEnv())
     if (credential === undefined) {
       this.cached = undefined
       return undefined

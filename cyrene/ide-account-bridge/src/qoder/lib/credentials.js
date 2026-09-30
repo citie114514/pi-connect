@@ -28,7 +28,17 @@
  *
  * @module dsh-connect-qoder/credentials
  */
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+
+/**
+ * The DPAPI unwrap runs as a child process, and it must not be synchronous:
+ * spawning the helper costs about two seconds on a cold start, and a blocking
+ * spawn holds the whole event loop for that long. The host activates plugins
+ * inside one global serial queue, so blocking here delays the plugin manager
+ * (and everything else on the main thread), not just this plugin.
+ */
+const execFileAsync = promisify(execFile)
 import {
   closeSync,
   existsSync,
@@ -219,7 +229,7 @@ export function setCredentialDiagnosticSink(sink) {
 /**
  * Block for a few milliseconds without spinning.
  *
- * `oscryptKeyFor` is synchronous (it wraps `execFileSync`), so it cannot await a
+ * `oscryptKeyFor` spawns a child process, so it cannot await a
  * backoff. `Atomics.wait` on a shared int is the one way to sleep on the main
  * thread without a busy loop; the wait is in microseconds and the timeout is in
  * milliseconds, so the value itself is irrelevant.
@@ -263,7 +273,7 @@ process.on('exit', () => {
  * @param appDir - absolute Electron user-data directory for the app.
  * @returns the 32-byte AES key, or `undefined` when it cannot be obtained.
  */
-export function oscryptKeyFor(appDir) {
+export async function oscryptKeyFor(appDir) {
   if (keyCache.has(appDir)) return keyCache.get(appDir)
   let key
   let lastFailure
@@ -284,7 +294,7 @@ export function oscryptKeyFor(appDir) {
       // be swept.
       writeFileSync(join(dir, OSCRYPT_MARKER), '')
       const outFile = join(dir, 'key.b64')
-      execFileSync(
+      await execFileAsync(
         systemPowershell(),
         ['-NoProfile', '-NonInteractive', '-Command', DPAPI_SCRIPT],
         {
@@ -695,12 +705,12 @@ function loadNewCredential(region, appDir, oscryptKey) {
  *
  * @returns a credential record, or `undefined` when no app holds a usable one.
  */
-export function loadCredential(region, appDataRoot) {
+export async function loadCredential(region, appDataRoot) {
   // 0.3.x: `com.<vendor>.app.stable/auth.v1.dat`.
   for (const appName of region.newAppNames ?? []) {
     const appDir = join(appDataRoot, appName)
     if (!existsSync(appDir)) continue
-    const oscryptKey = oscryptKeyFor(appDir)
+    const oscryptKey = await oscryptKeyFor(appDir)
     if (oscryptKey === undefined) continue
     const credential = safeRead(() => loadNewCredential(region, appDir, oscryptKey))
     if (credential !== undefined) return credential
@@ -710,7 +720,7 @@ export function loadCredential(region, appDataRoot) {
   for (const appName of region.appNames) {
     const appDir = join(appDataRoot, appName)
     if (!existsSync(appDir)) continue
-    const oscryptKey = oscryptKeyFor(appDir)
+    const oscryptKey = await oscryptKeyFor(appDir)
     if (oscryptKey === undefined) continue
     for (const dbPath of stateDbCandidates(appDir)) {
       if (!existsSync(dbPath)) continue
