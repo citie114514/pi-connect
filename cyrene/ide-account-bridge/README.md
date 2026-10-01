@@ -63,11 +63,23 @@ node smoke-test.cjs     # 14 项断言：工具 / IPC / 契约 / dispose 可重�
 | --- | --- | --- |
 | 交付形态 | npm 包 `@citie114514/pi-connect-qoder` / `-trae` | 插件目录（ZIP） |
 | 模型接入 | `pi.registerProvider` 注册原生 provider | 回环端点 + 用户手填 Base URL |
+| 上下文窗口 | 扩展广告的 `contextWindow`（默认取上游公布的最大档） | 用户在每个模型档案里手填 `contextWindowTokens` |
 | 用量 / 签到 | Pi 斜杠命令 | 面板按钮 + Agent 工具 |
 | 协议层 | 共用 | 共用 |
 
 两处宿主差异已参数化：凭据与缓存根路径由宿主注入（`cacheRoot` / `setTraeOwnDir()`），
 用量与签到返回结构化数据而非直接调用宿主 UI。
+
+## 上下文窗口（为何 Cyrene 侧不用改）
+
+Cyrene 的模型档案自带 `contextWindowTokens`，在设置里手填（宿主默认 256K），插件不参与这个值 ——
+所以**没有 Pi 版那个「不可达的保守默认」缺陷**：想要 1M 就在档案里填 1000000。
+
+残留限制：插件给的模型列表只有 `{ id, name }`，回环 shim 的 `/v1/models` 也只有
+`{ id, object, created, owned_by }`，都**不带上下文长度**，因此新增端点或换模型时仍要手填。
+Cyrene 侧的 `subscription-oauth` 插件其实认 `context_length` / `context_window` /
+`max_input_tokens` 等字段（`lib/model-context.cjs` 的 `CATALOG_FIELDS`），缺失时才按模型族兜底；
+要让它自动识别，需要给两个 shim 的 `/v1/models` 补上这些字段。
 
 ## 许可
 

@@ -206,10 +206,23 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 
 - 移除了 DSH 专属的**设置卡片与私有 web 路由**（依赖 DSH 宿主）；用量 / 每日签到改为斜杠命令，
   逻辑与守卫完整保留；
-- **上下文窗口默认取最大值**：DSH 卡片里的 `useMaximumContextWindow`（Qoder）与按模型 dev/Max
-  预算（Trae）在 Pi 里没有对应的持久化 settings 源，原本恒为默认，于是所有模型都被钉在目录的
-  200K / 256K dev 窗口。两个包改为用各自上游真正公布的窗口：Qoder 取 `contextOptions` 里最大的
-  一档（200K/400K/1M），Trae 在公布 Max 时取 `maxContextWindow`（未公布 Max 的模型保持 dev）；
+- **上下文窗口的默认值按宿主不同**（同一套协议层，三种宿主的可达性不一样）：
+
+  | 宿主 | 窗口由谁定 | 默认 | 用户能不能改 |
+  | --- | --- | --- | --- |
+  | Pi（本仓库两个包） | 扩展广告的 `contextWindow` | **上游真正公布的最大档**：Qoder 取 `contextOptions` 最大（200K/400K/1M），Trae 公布 Max 时取 `maxContextWindow`，未公布的模型保持 dev | 无 UI，写在 `index.js` 里 |
+  | DSH（上游插件，非本仓库） | 插件设置卡片 | 保守：Qoder `useMaximumContextWindow` 默认关 = 200K；Trae 每模型「DSH 上下文预算」默认 dev（200K/256K） | 卡片里可切到 400K/1M —— Qoder 是开关，Trae 是每模型的 dev/Max 单选（无 `maxContextWindow` 的模型 Max 置灰） |
+  | 昔涟 Cyrene（`cyrene/ide-account-bridge`） | 用户在模型档案里手填 `contextWindowTokens` | 手填值（宿主给的默认是 256K） | 直接改档案即可，插件不参与 |
+
+  Pi 端原本继承 DSH 的保守默认，但设置卡片没移植、偏好源恒为空（`preferMaximumContext({})` 永远
+  false），于是所有模型被钉在目录的 200K / 256K dev 窗口**且无处可改** —— 这才是本仓库要修的那个
+  缺陷。修法是只广告上游真正公布的窗口、不编造数值：Qoder 取 `contextOptions` 里最大的一档，Trae
+  在公布 Max 时取 `maxContextWindow`（未公布 Max 的模型保持 dev）。
+
+  **昔涟侧不需要改**：`model-settings.json` 的每个档案自带 `contextWindowTokens`，手填即可（本机四个
+  档案都是 `1000000`）。唯一残留：回环 shim 的 `/v1/models` 只返回 `{id, object, created, owned_by}`，
+  不带上下文字段，所以**新增端点或换模型时仍要手填**；Cyrene 侧的 `subscription-oauth` 插件其实认
+  `context_length` / `context_window` / `max_input_tokens` 等字段，要自动识别就得给 shim 补上。
 - Trae 的 Raw Chat 回退通道未接线（协议核心仍在 `lib/trae-core.js`，需要时可再补）；
 - 插件自有凭据副本落在 `~/.pi/agent/cache/<name>/`；
 - **输出上限（`maxTokens`）两个包处理相反，各自继承对应 DSH 插件的原决策**：
