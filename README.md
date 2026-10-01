@@ -51,6 +51,13 @@ pi-connect/                            (仓库根：npm workspaces)
 │  ├─ README.md           包说明
 │  ├─ THIRD_PARTY_NOTICES.md  上游 MIT 归属
 │  └─ lib/trae-core.js    从 DSH bundle 手术提取的协议核心
+├─ cyrene/ide-account-bridge/    昔涟（Cyrene）宿主版（见下方说明）
+│  ├─ src/entry.js         插件入口：register / unregister / open，IPC + 三个 Agent 工具
+│  ├─ src/endpoints.js     回环端点持久化（端口 + bearer token，跨重启稳定）
+│  ├─ src/qoder/、src/trae/  区域运行时 + 协议模块（与 Pi 版共用协议层）
+│  ├─ panel/               配置面板（端点 / 模型 / 额度 / 签到按钮）
+│  ├─ README.md           源码说明 + 使用方法（构建、安装、模型档案、工具）
+│  └─ smoke-test.cjs / test-*.cjs   Mock Context 冒烟与回归测试
 └─ dist/                  npm pack 产物（.tgz，已 gitignore）
 ```
 
@@ -191,6 +198,16 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 /qoder-usage
 /trae-checkin
 ```
+
+### 昔涟（Cyrene）宿主
+
+昔涟版不打 npm 包，而是把 `cyrene/ide-account-bridge` 打成插件目录 / ZIP 导入：安装并启用插件
+→ 面板上复制每个区域的 **Base URL + token** → 在 Cyrene「设置 → 模型 → 新增模型档案」里填成
+OpenAI 兼容档案（`contextWindowTokens` 手填）。
+
+完整用法（安装与启用、模型档案字段、面板按钮、Agent 工具、端口与 token 为何跨重启稳定）
+见 **`cyrene/ide-account-bridge/README.md` 的「使用方法」一节**；随插件分发的用户版说明是
+打包产物里的 `dist/README.md`（另含网络访问 / 文件读写 / 子进程 / 风险披露）。
 
 ## 验证结果（2026-09-28）
 
