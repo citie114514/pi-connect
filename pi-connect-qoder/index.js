@@ -162,7 +162,13 @@ function createQoderPiProvider(runtime, logger) {
   const buildModels = () => {
     if (regionEnabledFor({}, region.id) !== true) return [];
     const baseUrl = runtime.baseUrlOrPlaceholder();
-    const widest = preferMaximumContext({});
+    // Pi has no settings card, so the DSH bundle's `useMaximumContextWindow`
+    // switch is unreachable here: `preferMaximumContext({})` always answered
+    // false and pinned every row to Qoder's 200K catalog default. Seed the
+    // preference on instead — Qoder's own client offers 200K/400K/1M for these
+    // models and the gateway accepts the largest, so with no reachable switch
+    // 1M is the window the account actually runs with.
+    const widest = preferMaximumContext({ useMaximumContextWindow: true });
     const enabled = enabledIdsFor({}, region.id);
     return filterByEnabled(runtime.catalog.current(), enabled).map((entry) => {
       const model = toPiModel(entry, baseUrl, region.id, widest, imageModeFor({}, entry.id));

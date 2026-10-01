@@ -78,6 +78,11 @@ Qoder 上了新模型，在包发新版之前用户根本用不到。`display_na
 ## 与 DSH 版的差异
 
 - 移除了 DSH 的设置卡片与私有 web 路由（Pi 没有对应宿主）；用量/签到改为上面的斜杠命令。
+- **默认广告最大上下文窗口。** DSH 的卡片里有 `useMaximumContextWindow` 开关，默认关 = 用
+  Qoder 目录的 200K 默认值；Pi 没有持久化 settings 源，`preferMaximumContext({})` 永远是
+  false，于是每个模型都被钉在 200K。此处改为默认开启该偏好：Qoder 客户端本来就提供
+  200K / 400K / 1M 三档，网关接受最大值，所以没有可达开关时 1M 才是账号实际跑的窗口。
+  目录未公布窗口的条目（如 `Auto`）仍回落到目录的 `defaultContextWindow`。
 - **刻意不声明 `maxTokens`。** 一旦声明，pi-ai 会把它当作输出上限发成 `max_tokens`，而推理与
   回答共用这份预算，长回复会被从中间截断并报 `finish: max-tokens`。请求上限走
   `options.maxTokens`，模型只广告 `contextWindow` 供 `--list-models` 显示。

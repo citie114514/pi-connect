@@ -69,6 +69,11 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 ## 与 DSH 版的差异
 
 - 移除了 DSH 的设置卡片与私有 web 路由；用量/签到改为上面的斜杠命令。
+- **默认广告最大上下文窗口。** DSH 的卡片里有按模型选择 dev / Max 窗口的上下文预算，Pi
+  没有对应 UI，于是每行都停在目录的 dev 窗口（200K / 256K）。此处在 Trae 公布 Max 时
+  （实时目录的 `context_window_tokens.max` → `maxContextWindow`）广告该模型自己的 Max，
+  没公布 Max 的模型（如 `kimi-k2.6`、`Doubao-Seed-2.1-Turbo`）仍保持 dev，不编造数值。
+  CN 静态 fallback 同步补上了已公布的 Max。
 - 未包含 Trae 的 Raw Chat 回退通道（协议核心仍在 `lib/trae-core.js`，需要时可再接线）。
 - 模型描述符广告 `maxTokens`：Pi 的 `--list-models` 不做 undefined 保护，而该字段只约束
   思考预算（请求上限走 `options.maxTokens`），因此不会截断回复。

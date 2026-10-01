@@ -206,6 +206,10 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 
 - 移除了 DSH 专属的**设置卡片与私有 web 路由**（依赖 DSH 宿主）；用量 / 每日签到改为斜杠命令，
   逻辑与守卫完整保留；
+- **上下文窗口默认取最大值**：DSH 卡片里的 `useMaximumContextWindow`（Qoder）与按模型 dev/Max
+  预算（Trae）在 Pi 里没有对应的持久化 settings 源，原本恒为默认，于是所有模型都被钉在目录的
+  200K / 256K dev 窗口。两个包改为用各自上游真正公布的窗口：Qoder 取 `contextOptions` 里最大的
+  一档（200K/400K/1M），Trae 在公布 Max 时取 `maxContextWindow`（未公布 Max 的模型保持 dev）；
 - Trae 的 Raw Chat 回退通道未接线（协议核心仍在 `lib/trae-core.js`，需要时可再补）；
 - 插件自有凭据副本落在 `~/.pi/agent/cache/<name>/`；
 - **输出上限（`maxTokens`）两个包处理相反，各自继承对应 DSH 插件的原决策**：

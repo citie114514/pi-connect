@@ -1,6 +1,6 @@
 {
   "name": "@citie114514/pi-connect-trae",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "displayName": "Pi Connect Trae",
   "description": "将本机已登录的 Trae（国内版 / 国际版）模型接入 Pi coding agent，国内版与国际版双供应商并行；附额度查看与每日签到命令，复用 DSH 插件的协议与凭据逻辑。",
   "type": "module",

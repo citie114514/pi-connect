@@ -221,7 +221,13 @@ function createTraePiProvider(stack, logger) {
   const buildModels = () => {
     const baseUrl = stack.baseUrlOrPlaceholder();
     return stack.catalog.current().map((info) => {
-      const contextWindow = info.contextWindow === undefined ? 200000 : info.contextWindow;
+      // Pi has no per-model context budget card, so the DSH bundle's Max-window
+      // selector is unreachable here and a row on its dev window would sit at
+      // 200K/256K forever. Trae's live directory publishes both windows
+      // (`context_window_tokens.dev` → `contextWindow`, `.max` →
+      // `maxContextWindow`); advertise the model's own Max when it offers one,
+      // and never invent a value for a model that does not.
+      const contextWindow = info.maxContextWindow ?? info.contextWindow ?? 200000;
       return {
         id: info.id,
         name: traeModelDisplayName(info),

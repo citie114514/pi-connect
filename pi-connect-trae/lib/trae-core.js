@@ -48,17 +48,20 @@ const FALLBACK_TRAE_MODELS = [
 	{
 		id: "DeepSeek-V4-Flash-Official",
 		name: "DeepSeek-V4-Flash",
-		contextWindow: 2e5
+		contextWindow: 2e5,
+		maxContextWindow: 1e6
 	},
 	{
 		id: "DeepSeek-V4-Pro-Official",
 		name: "DeepSeek-V4-Pro",
-		contextWindow: 2e5
+		contextWindow: 2e5,
+		maxContextWindow: 1e6
 	},
 	{
 		id: "glm-5.2",
 		name: "GLM-5.2",
-		contextWindow: 2e5
+		contextWindow: 2e5,
+		maxContextWindow: 1e6
 	},
 	{
 		id: "kimi-k2.6",
