@@ -49,19 +49,28 @@ const FALLBACK_TRAE_MODELS = [
 		id: "DeepSeek-V4-Flash-Official",
 		name: "DeepSeek-V4-Flash",
 		contextWindow: 2e5,
-		maxContextWindow: 1e6
+		maxContextWindow: 1e6,
+		reasoningSupported: true,
+		reasoning: { supported: ["low", "high", "xhigh"], defaultEffort: "high" },
+		reasoningEfforts: { low: "light", high: "high", xhigh: "extra_high" }
 	},
 	{
 		id: "DeepSeek-V4-Pro-Official",
 		name: "DeepSeek-V4-Pro",
 		contextWindow: 2e5,
-		maxContextWindow: 1e6
+		maxContextWindow: 1e6,
+		reasoningSupported: true,
+		reasoning: { supported: ["low", "high", "xhigh"], defaultEffort: "high" },
+		reasoningEfforts: { low: "light", high: "high", xhigh: "extra_high" }
 	},
 	{
 		id: "glm-5.2",
 		name: "GLM-5.2",
 		contextWindow: 2e5,
-		maxContextWindow: 1e6
+		maxContextWindow: 1e6,
+		reasoningSupported: true,
+		reasoning: { supported: ["high", "xhigh"], defaultEffort: "high" },
+		reasoningEfforts: { high: "high", xhigh: "extra_high" }
 	},
 	{
 		id: "kimi-k2.6",
@@ -204,7 +213,7 @@ function mergeTraeModelSources(remote, wire) {
 			reasoningSupported: model.reasoningSupported,
 			...model.reasoning === void 0 ? {} : {
 				reasoning: model.reasoning,
-				reasoningEfforts: Object.fromEntries(model.reasoning.supported.map((effort) => [effort, effort === "low" ? "light" : effort === "xhigh" ? "extra_high" : "high"]))
+				reasoningEfforts: Object.fromEntries(model.reasoning.supported.map((effort) => [effort, TRAE_REASONING_WIRE[effort] ?? effort]))
 			},
 			...wireModel.id !== "" && wireModel.id !== model.id ? { wireConfigName: wireModel.id } : {},
 			...wireModel.function === void 0 ? {} : { wireFunction: wireModel.function }
@@ -236,7 +245,7 @@ function discoveredCatalog(models) {
 		reasoningSupported: model.reasoningSupported,
 		...model.reasoning === void 0 ? {} : {
 			reasoning: model.reasoning,
-			reasoningEfforts: Object.fromEntries(model.reasoning.supported.map((effort) => [effort, effort === "low" ? "light" : effort === "xhigh" ? "extra_high" : "high"]))
+			reasoningEfforts: Object.fromEntries(model.reasoning.supported.map((effort) => [effort, TRAE_REASONING_WIRE[effort] ?? effort]))
 		}
 	});
 	return result;
@@ -2338,9 +2347,28 @@ function parseFeatures(value) {
 	}
 }
 const EFFORT_MAP = {
+	minimal: "minimal",
 	light: "low",
+	medium: "medium",
 	high: "high",
 	extra_high: "xhigh"
+};
+/**
+* The inverse of EFFORT_MAP: pi level -> Trae wire spelling.
+*
+* Kept as an explicit table instead of re-deriving it, because the inline
+* ternary this replaces collapsed every name it did not know onto "high":
+* "minimal" and "medium" - both of which Trae's own reasoning_effort_options
+* may advertise (see TRAE_REASONING_EFFORTS) - were shown to the user as high
+* and then sent to Trae as high. Dropping an offered level is bad; relabelling
+* it as a different level is worse.
+*/
+const TRAE_REASONING_WIRE = {
+	minimal: "minimal",
+	low: "light",
+	medium: "medium",
+	high: "high",
+	xhigh: "extra_high"
 };
 /** Parse only capabilities explicitly advertised by Trae's remote model API. */
 function parseTraeRemoteModel(value) {

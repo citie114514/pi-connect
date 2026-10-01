@@ -117,6 +117,94 @@ text = text.replace(
   `$1\n\t// Pi port: never let the shim's listener hold the process open.\n\tserver.unref();`,
 );
 
+// --- 4c. Complete the reasoning-effort vocabulary ---
+// Trae's own `reasoning_effort_options` may name `minimal` / `medium` (this
+// file's TRAE_REASONING_EFFORTS lists both). The DSH parser only knew
+// light/high/extra_high, and the inverse mapping collapsed every other name
+// onto "high" — so a level Trae offered could be advertised to the user as a
+// different level. Patch both tables.
+const EFFORT_MAP_SRC = 'const EFFORT_MAP = {\n\tlight: "low",\n\thigh: "high",\n\textra_high: "xhigh"\n};';
+const EFFORT_MAP_DST = `const EFFORT_MAP = {
+	minimal: "minimal",
+	light: "low",
+	medium: "medium",
+	high: "high",
+	extra_high: "xhigh"
+};
+/**
+* The inverse of EFFORT_MAP: pi level -> Trae wire spelling.
+*
+* Kept as an explicit table instead of re-deriving it, because the inline
+* ternary this replaces collapsed every name it did not know onto "high":
+* "minimal" and "medium" - both of which Trae's own reasoning_effort_options
+* may advertise (see TRAE_REASONING_EFFORTS) - were shown to the user as high
+* and then sent to Trae as high. Dropping an offered level is bad; relabelling
+* it as a different level is worse.
+*/
+const TRAE_REASONING_WIRE = {
+	minimal: "minimal",
+	low: "light",
+	medium: "medium",
+	high: "high",
+	xhigh: "extra_high"
+};`;
+if (!text.includes(EFFORT_MAP_SRC)) throw new Error("EFFORT_MAP block not found");
+text = text.replace(EFFORT_MAP_SRC, EFFORT_MAP_DST);
+const EFFORT_REVERSE_SRC = 'Object.fromEntries(model.reasoning.supported.map((effort) => [effort, effort === "low" ? "light" : effort === "xhigh" ? "extra_high" : "high"]))';
+const EFFORT_REVERSE_DST = 'Object.fromEntries(model.reasoning.supported.map((effort) => [effort, TRAE_REASONING_WIRE[effort] ?? effort]))';
+if (!text.includes(EFFORT_REVERSE_SRC)) throw new Error("reasoning-effort inverse mapping not found");
+text = text.split(EFFORT_REVERSE_SRC).join(EFFORT_REVERSE_DST);
+
+// --- 4d. Restore the published CN fallback windows and efforts ---
+// The bootstrap roster is what Pi serves before the first live directory
+// refresh lands (session-less calls, failed refresh, signed out). The DSH
+// bundle carried only `contextWindow: 2e5`, so every fallback row advertised the
+// dev window and — because it carried no `reasoningEfforts` at all — was
+// reported as a non-reasoning model, i.e. thinking permanently off. Both facts
+// are reproduced from Trae's own published metadata (see docs/CATALOG_EVIDENCE
+// in the DSH bundle): no value here is invented, and `kimi-k2.6` keeps no
+// efforts because Trae publishes none for it.
+const FB_START = "const FALLBACK_TRAE_MODELS = [";
+const fbStart = text.indexOf(FB_START);
+if (fbStart < 0) throw new Error("FALLBACK_TRAE_MODELS not found");
+const fbEnd = text.indexOf("\n];", fbStart);
+if (fbEnd < 0) throw new Error("FALLBACK_TRAE_MODELS end not found");
+const FB_DST = `const FALLBACK_TRAE_MODELS = [
+	{
+		id: "DeepSeek-V4-Flash-Official",
+		name: "DeepSeek-V4-Flash",
+		contextWindow: 2e5,
+		maxContextWindow: 1e6,
+		reasoningSupported: true,
+		reasoning: { supported: ["low", "high", "xhigh"], defaultEffort: "high" },
+		reasoningEfforts: { low: "light", high: "high", xhigh: "extra_high" }
+	},
+	{
+		id: "DeepSeek-V4-Pro-Official",
+		name: "DeepSeek-V4-Pro",
+		contextWindow: 2e5,
+		maxContextWindow: 1e6,
+		reasoningSupported: true,
+		reasoning: { supported: ["low", "high", "xhigh"], defaultEffort: "high" },
+		reasoningEfforts: { low: "light", high: "high", xhigh: "extra_high" }
+	},
+	{
+		id: "glm-5.2",
+		name: "GLM-5.2",
+		contextWindow: 2e5,
+		maxContextWindow: 1e6,
+		reasoningSupported: true,
+		reasoning: { supported: ["high", "xhigh"], defaultEffort: "high" },
+		reasoningEfforts: { high: "high", xhigh: "extra_high" }
+	},
+	{
+		id: "kimi-k2.6",
+		name: "Kimi-K2.6",
+		contextWindow: 2e5
+	}
+];`;
+text = text.slice(0, fbStart) + FB_DST + text.slice(fbEnd + 3);
+
 // --- 5. Strip the DSH-only regions, keep the protocol core + usage/check-in logic ---
 // Kept: everything through `src/web-status.ts` (usage client, check-in status,
 // credit/check-in projection helpers used by the Pi commands).

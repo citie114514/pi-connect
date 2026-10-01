@@ -75,6 +75,18 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
   没公布 Max 的模型（如 `kimi-k2.6`、`Doubao-Seed-2.1-Turbo`）仍保持 dev，不编造数值。
   CN 静态 fallback 同步补上了已公布的 Max。
 - 未包含 Trae 的 Raw Chat 回退通道（协议核心仍在 `lib/trae-core.js`，需要时可再接线）。
+- **思考档位如实广告**（三处修正）：
+  1. **不提供「关闭」是故意的**：Trae 的 SOLO 请求体只有 `reasoning_effort` 一个思考字段，没有
+     「关掉思考」的表达，所以推理模型一律 `off: null`（不可选），与上游 DSH 插件一致 ——
+     而不是允选后静默回落成默认档位。
+  2. **档位词表补全**：Trae 自己的 `reasoning_effort_options` 允许
+     `minimal / low / medium / high / xhigh`，但旧的反向映射把不认识的档位一律写成 `high`
+     —— 上游给了 `medium` 也会被当成 high 显示、发成 high。现在 `EFFORT_MAP` 与
+     `TRAE_REASONING_WIRE` 是两张显式表（`light → low`、`extra_high → xhigh` 仍保留）。
+  3. **CN 静态 fallback 补上已公布的窗口与档位**（它在实时目录拉不到时就是模型清单）：
+     DeepSeek-V4-Flash/Pro-Official 为 low/high/xhigh，glm-5.2 为 high/xhigh，
+     kimi-k2.6 上游未公布故保持无档位。此前 4 个 fallback 模型只有 dev 窗口、
+     且因为不带 `reasoningEfforts` 被当成非推理模型（`--list-models` 的 thinking 列显示 `no`）。
 - 模型描述符广告 `maxTokens`：Pi 的 `--list-models` 不做 undefined 保护，而该字段只约束
   思考预算（请求上限走 `options.maxTokens`），因此不会截断回复。
 

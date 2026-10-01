@@ -240,6 +240,11 @@ OpenAI 兼容档案（`contextWindowTokens` 手填）。
   档案都是 `1000000`）。唯一残留：回环 shim 的 `/v1/models` 只返回 `{id, object, created, owned_by}`，
   不带上下文字段，所以**新增端点或换模型时仍要手填**；Cyrene 侧的 `subscription-oauth` 插件其实认
   `context_length` / `context_window` / `max_input_tokens` 等字段，要自动识别就得给 shim 补上。
+- **思考档位（reasoning effort）按上游公布的原样广告**：Trae 的 SOLO 请求体只有
+  `reasoning_effort`，没有关闭思考的表达，所以推理模型不可选「关闭」（`off: null`，与上游 DSH
+  插件一致）；档位词表按 Trae 自己的 `reasoning_effort_options`（minimal/low/medium/high/xhigh）
+  完整建立，不再把不认识的档位一律写成 `high`；CN 静态 fallback 也带上了已公布的 dev/Max 窗口
+  与档位，不再在实时目录拉不到时把模型当成非推理模型（thinking 列显示 `no`）；
 - Trae 的 Raw Chat 回退通道未接线（协议核心仍在 `lib/trae-core.js`，需要时可再补）；
 - 插件自有凭据副本落在 `~/.pi/agent/cache/<name>/`；
 - **输出上限（`maxTokens`）两个包处理相反，各自继承对应 DSH 插件的原决策**：
