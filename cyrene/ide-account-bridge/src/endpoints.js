@@ -57,7 +57,10 @@ export function createEndpointStore({ path, logger } = {}) {
     try {
       mkdirSync(dirname(path), { recursive: true })
       const tmp = `${path}.tmp`
-      writeFileSync(tmp, JSON.stringify({ version: FORMAT_VERSION, entries }, null, 2), 'utf8')
+      // `0o600` because the file holds bearer tokens. POSIX honours it; Windows
+      // ignores the mode and inherits the storage directory's ACL — the same
+      // caveat the README documents for the Trae credential copy.
+      writeFileSync(tmp, JSON.stringify({ version: FORMAT_VERSION, entries }, null, 2), { encoding: 'utf8', mode: 0o600 })
       renameSync(tmp, path)
     } catch (error) {
       logger?.warn?.('ide-account-bridge: 端点缓存写入失败（端口与 token 将无法跨重启保持）', error instanceof Error ? error.message : String(error))
