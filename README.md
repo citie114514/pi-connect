@@ -39,7 +39,8 @@ pi-connect/                            (仓库根：npm workspaces)
 ├─ pi-connect-qoder/
 │  ├─ index.js            Pi 扩展入口（注册 qoder-cn / qoder）
 │  ├─ commands.js         /qoder-usage、/qoder-checkin
-│  ├─ package.json        npm 包元数据 + pi.extensions 清单
+│  ├─ package.json        npm 包元数据 + pi.extensions / pi.skills 清单
+│  ├─ skills/model-catalog/  随包 skill：查/刷新模型目录（/skill:pi-connect-model-catalog）
 │  ├─ README.md           包说明
 │  ├─ THIRD_PARTY_NOTICES.md  上游 MIT 归属
 │  └─ lib/                原插件无依赖协议模块（原样复用）
@@ -197,6 +198,7 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 # 在交互式会话中：
 /qoder-usage
 /trae-checkin
+/skill:pi-connect-model-catalog        # 让 agent 自己查/刷新模型目录（见「随包 skill」）
 ```
 
 ### 昔涟（Cyrene）宿主

@@ -93,6 +93,20 @@ Qoder 上了新模型，在包发新版之前用户根本用不到。`display_na
   > 注意 Trae 包的处理是**相反**的：`pi-connect-trae` 确实广告 `maxTokens`。两个包各自继承了
   > 对应 DSH 插件的原决策，没有强行统一。
 
+## 随包 skill：查模型目录
+
+包里带一个 skill `pi-connect-model-catalog`（`skills/model-catalog/SKILL.md`，由 `package.json` 的
+`pi.skills` 声明）：告诉 agent 怎么拿到当前模型清单 —— `pi --list-models`、插件的目录缓存
+（`.qoder-catalog.<region>.json` 的 `contextOptions` / `effortLevels` / `promotion`）、
+强制刷新（跑一次会话）、以及 `models-store.json` / DSH / 昔涟 里的同一份目录，附带常见坑
+（`Auto` 只有 200K、Trae 没有磁盘缓存、本地工作副本可能带过滤补丁、workbuddy 要走网关 `/v1/models`）。
+
+- **npm 安装**（`pi install npm:@citie114514/pi-connect-qoder`）：skill 随包安装，直接用
+  `/skill:pi-connect-model-catalog`；
+- **目录安装**（把本目录复制到 `~/.pi/agent/extensions/`）：pi 不从扩展目录读 skill，需要把
+  `skills/model-catalog/` 放到 `~/.agents/skills/pi-connect-model-catalog/`（本机已放好，并硬链接到
+  `.codex` / `.dsh` / `.trae` / `.trae-cn` / `.workbuddy` / `.workbuddy-ai` / opencode 的 skills 目录）。
+
 ## 许可
 
 MIT
