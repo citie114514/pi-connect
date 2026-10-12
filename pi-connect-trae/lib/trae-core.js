@@ -1230,7 +1230,13 @@ const REFRESH_CONTRACT = {
 	},
 	solo: {
 		path: "/cloudide/api/v3/trae/oauth/ExchangeToken",
-		clientId: "ono9krqynydwx5",
+		// Verified 2026-10-12 against a live TRAE SOLO CN install: the SOLO
+		// refresh token is bound to the SOLO client id, not the IDE's. Sending
+		// `ono9krqynydwx5` (the DSH bundle's value, and the CN/SG IDE id) is
+		// rejected with 400 / code 10101 "refresh token is not matched to the
+		// client", which surfaced as "Trae 模型全没了" in Pi. With
+		// `en1oxy7wnw8j9n` the same host+path answers 200 and returns a token.
+		clientId: "en1oxy7wnw8j9n",
 		deviceInfo: false
 	},
 	"solo-sg": {

@@ -63,10 +63,20 @@ class RegionStack {
       const store = this.store;
       const hint = region === "ai" ? "solo-sg" : "cn";
       try {
-        const credential = await store.resolve();
+        // Read the credential WITHOUT resolving it. `resolve()` may start a
+        // token refresh, and that refresh callback (below) awaits `device()`
+        // → `identity()` → back here: the re-entrant call returns the SAME
+        // in-flight refresh promise, so the refresh can never settle and every
+        // caller deadlocks. Observed 2026-10-12: an expired CN token hung the
+        // whole model runtime, so pi listed no models at all (not just Trae's).
+        // DSH's own bundle reads `store.current()` here for exactly this
+        // reason; `current()` is a plain local read with no refresh.
+        const credential = await store.current();
         const candidates = store.candidates();
         return await resolveTraeIdentity(
-          candidates.filter((c) => c.edition === credential.edition),
+          credential === undefined
+            ? []
+            : candidates.filter((c) => c.edition === credential.edition),
           hint,
         );
       } catch {
