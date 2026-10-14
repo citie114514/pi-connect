@@ -127,6 +127,9 @@ export function createQoderShim(options) {
     invalidateCredential,
     region,
     logger,
+    // Called once per request before routing. Absent on the Pi port, which
+    // refreshes from `auth.apiKey.resolve()` instead.
+    refreshCatalog,
     // Endpoint stability. Both are optional so the Pi port keeps its original
     // per-process behaviour; Cyrene persists them so a model profile survives a
     // restart. `preferredPort` is only a preference — a busy port falls back to
@@ -219,6 +222,18 @@ export function createQoderShim(options) {
     if (!bearerOk(req)) {
       writeError(res, 401, 'unauthorized', 'missing or invalid Authorization bearer')
       return
+    }
+    // Keep the model directory current, the way the Pi port does from
+    // `auth.apiKey.resolve()`. `refreshCatalog` is TTL-gated (30 min), so this
+    // is a no-op for every request inside the window; a failure inside it is
+    // swallowed and the last good catalog is served, so a dead upstream never
+    // turns into a failed request.
+    if (typeof refreshCatalog === 'function') {
+      try {
+        await refreshCatalog()
+      } catch (error) {
+        logger?.warn?.(`dsh-connect-qoder: ${region.displayName} 请求前目录刷新失败，使用缓存目录`, error)
+      }
     }
     const url = req.url ?? '/'
     if (req.method === 'GET' && (url === '/healthz' || url === '/healthz/')) {

@@ -69,6 +69,9 @@ class RegionRuntime {
       resolveEnabledIds: () => [],
       invalidateCredential: () => this.credentials.invalidate(),
       logger: this.logger,
+      // Lets a request refresh the directory, mirroring what the Pi port does
+      // from `auth.apiKey.resolve()`. TTL-gated inside `refreshCatalog`.
+      refreshCatalog: () => this.refreshCatalog(),
       ...this.endpoints === undefined
         ? {}
         : {

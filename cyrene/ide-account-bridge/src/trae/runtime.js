@@ -43,6 +43,9 @@ import { registerTraeCommands } from "./commands.js";
 /** Every region, matching the DSH bundle's card tab order. */
 const REGION_KEYS = ["cn", "ai"];
 
+/** How long a discovered Trae model directory stays fresh before rediscovery. */
+const CATALOG_TTL_MS = 30 * 60 * 1000;
+
 /**
  * One region's stack: credential store, catalog, shim, upstream bridge.
  */
@@ -52,6 +55,8 @@ class RegionStack {
     // but the parameter is kept so the positional shape matches the factory.
     this.endpoints = endpoints;
     this.portIndex = portIndex;
+    /** When the current model directory was discovered; 0 means never. */
+    this.modelsDiscoveredAt = 0;
     this.region = region;
     this.logger = logger;
     this.catalog = new TraeCatalog(region);
@@ -104,6 +109,9 @@ class RegionStack {
       catalog: this.catalog,
       client: this.delegating,
       logger: this.logger,
+      // Lets a request refresh the directory, mirroring what the Pi port does
+      // from `auth.apiKey.resolve()`.
+      refreshCatalog: () => this.refreshCatalog(),
       // Absent on the Pi port, which keeps its original random-per-process
       // behaviour.
       ...this.endpoints === undefined
@@ -145,6 +153,9 @@ class RegionStack {
         .then((models) => {
           if (models.length > 0) {
             this.catalog.set(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
+            // Only a success moves the clock forward: an empty discovery must
+            // let the next request retry rather than sit on it for 30 minutes.
+            this.modelsDiscoveredAt = Date.now();
           }
           return true;
         })
@@ -156,6 +167,24 @@ class RegionStack {
     }
     await this.modelsReady;
     return shim;
+  }
+
+  /**
+   * Re-discover the model directory when it has gone stale.
+   *
+   * Called once per request from the shim, the way the Pi port refreshes from
+   * `auth.apiKey.resolve()`. TTL-gated, so inside the window this is a no-op and
+   * costs nothing. On failure `modelsDiscoveredAt` is left alone, so the next
+   * request retries — same "keep the last good directory" behaviour as the
+   * Qoder side.
+   *
+   * @returns the shim when a discovery ran, or `null` when this was a no-op.
+   */
+  async refreshCatalog() {
+    if (this.modelsReady !== undefined && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
+    // Clearing the memo makes `ensureReady` run a discovery again.
+    this.modelsReady = undefined;
+    return this.ensureReady();
   }
 
   /**
