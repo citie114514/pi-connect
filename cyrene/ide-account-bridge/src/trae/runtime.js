@@ -57,6 +57,17 @@ class RegionStack {
     this.portIndex = portIndex;
     /** When the current model directory was discovered; 0 means never. */
     this.modelsDiscoveredAt = 0;
+    /**
+     * Whether a non-empty directory has been landed at least once.
+     *
+     * Deliberately separate from `modelsPending`: one flag answers "do we have
+     * a directory", the other "is a fetch in the air". Collapsing both into a
+     * single promise slot is what let a refresh clear a discovery that had not
+     * landed yet, so the next request started a duplicate one.
+     */
+    this.modelsReady = false;
+    /** The in-flight discovery, shared by callers that arrive during it. */
+    this.modelsPending = undefined;
     this.region = region;
     this.logger = logger;
     this.catalog = new TraeCatalog(region);
@@ -148,24 +159,34 @@ class RegionStack {
    */
   async ensureReady() {
     const shim = await this.ensureShim();
-    if (this.modelsReady === undefined) {
-      this.modelsReady = this.discoverModels()
+    // One discovery at a time. A caller arriving mid-flight joins the run that
+    // is already going instead of paying for a second one, which also means
+    // there is only ever one result landing — "whoever finishes last wins"
+    // stops being a race.
+    if (this.modelsReady === false && this.modelsPending === undefined) {
+      const flight = this.discoverModels()
         .then((models) => {
           if (models.length > 0) {
             this.catalog.set(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
             // Only a success moves the clock forward: an empty discovery must
             // let the next request retry rather than sit on it for 30 minutes.
             this.modelsDiscoveredAt = Date.now();
+            this.modelsReady = true;
           }
           return true;
         })
         .catch((error) => {
           this.logger?.warn?.(`trae: model directory discovery failed for ${this.region}`, error);
-          this.modelsReady = undefined;
           return false;
+        })
+        .finally(() => {
+          // Only the flight that still owns the slot may release it; a run
+          // that finished late must not wipe a newer one's promise.
+          if (this.modelsPending === flight) this.modelsPending = undefined;
         });
+      this.modelsPending = flight;
     }
-    await this.modelsReady;
+    if (this.modelsPending !== undefined) await this.modelsPending;
     return shim;
   }
 
@@ -181,9 +202,17 @@ class RegionStack {
    * @returns the shim when a discovery ran, or `null` when this was a no-op.
    */
   async refreshCatalog() {
-    if (this.modelsReady !== undefined && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
-    // Clearing the memo makes `ensureReady` run a discovery again.
-    this.modelsReady = undefined;
+    // A discovery is already running: join it rather than starting a second
+    // one. This matters most on the first request after start-up, when
+    // `modelsDiscoveredAt` is still 0 and every concurrent caller would
+    // otherwise look stale and fire its own fetch.
+    if (this.modelsPending !== undefined) return this.modelsPending;
+    // Fresh: nothing to do. Checked after the in-flight case so a run that has
+    // already landed is never mistaken for one still owed.
+    if (this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
+    // Stale, or never discovered. Drop the completed memo so `ensureReady`
+    // rediscovers; nothing is in flight, so this cannot orphan a promise.
+    this.modelsReady = false;
     return this.ensureReady();
   }
 
