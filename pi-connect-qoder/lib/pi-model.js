@@ -23,6 +23,10 @@
  *    configured output ceiling and pi-ai sends it as `max_tokens`; reasoning
  *    shares that budget with the answer, so a declared ceiling truncates long
  *    replies mid-sentence and the harness reports `finish: max-tokens`.
+ *    Pi cannot tolerate an absent value (`--list-models` throws on
+ *    `undefined`), so `index.js` fills one in — clamped to the gateway's
+ *    128K ceiling, never to the context window. `MAX_OUTPUT_TOKENS` in
+ *    `upstream.js` explains why the two differ.
  *
  * Neither is a cosmetic field, and neither was asserted anywhere.
  *

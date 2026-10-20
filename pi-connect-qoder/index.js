@@ -40,7 +40,7 @@ import { createQoderShim } from "./lib/shim.js";
 import { CatalogStore } from "./lib/catalog-store.js";
 import { normalizeEntry, filterByEnabled } from "./lib/catalog-entry.js";
 import { toPiModel } from "./lib/pi-model.js";
-import { exchangePat, fetchModels } from "./lib/upstream.js";
+import { exchangePat, fetchModels, MAX_OUTPUT_TOKENS } from "./lib/upstream.js";
 import { isCredentialUsable } from "./lib/credentials.js";
 import { unwrapVolatile } from "./lib/volatile.js";
 import { enabledIdsFor, imageModeFor, preferMaximumContext, regionEnabledFor, resolvePreferences } from "./lib/preferences.js";
@@ -169,15 +169,26 @@ function createQoderPiProvider(runtime, logger) {
     // models and the gateway accepts the largest, so with no reachable switch
     // 1M is the window the account actually runs with.
     const widest = preferMaximumContext({ useMaximumContextWindow: true });
+    // No model filter: `enabledIdsFor({})` is empty (Pi has no persisted
+    // settings source), and the empty list means "no filter", so every model
+    // Qoder publishes for this region is offered. (2026-10-03 之前这里有一份
+    // 临时白名单把 qoder-cn 收窄到 Qwen3.8-Max / Qwen3.8-Flash，已按用户要求
+    // 撤销；要再收窄请用 enabledIdsFor 的持久化源或改回显式数组。)
     const enabled = enabledIdsFor({}, region.id);
     return filterByEnabled(runtime.catalog.current(), enabled).map((entry) => {
       const model = toPiModel(entry, baseUrl, region.id, widest, imageModeFor({}, entry.id));
-      // Pi's `--list-models` renders maxTokens without an undefined guard, and
-      // a declared value only bounds the thinking budget (pi-ai sends
-      // `options.maxTokens`, never `model.maxTokens`, as the request ceiling),
-      // so advertising the full context window is display-safe and never
-      // truncates — preserving the DSH bundle's "no output ceiling" decision.
-      if (model.maxTokens === undefined) model.maxTokens = model.contextWindow;
+      // Pi's `--list-models` renders `maxTokens` through
+      // `formatTokenCount(m.maxTokens)`, which ends in `count.toString()` and
+      // throws on `undefined`, so a value must be present. It is clamped to the
+      // gateway's own `max_tokens` ceiling rather than to the context window:
+      // pi-ai forwards this as `parameters.max_tokens` on every request, and
+      // the gateway rejects anything above 128K with an in-band
+      // `provider_error` frame — a 200 stream with no completion in it, which
+      // surfaces as "无法连接" for every model whose window is 200K or 1M.
+      // See `MAX_OUTPUT_TOKENS` in `lib/upstream.js` for the measurements.
+      if (model.maxTokens === undefined) {
+        model.maxTokens = Math.min(model.contextWindow, MAX_OUTPUT_TOKENS);
+      }
       return model;
     });
   };

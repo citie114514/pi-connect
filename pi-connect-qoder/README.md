@@ -83,15 +83,23 @@ Qoder 上了新模型，在包发新版之前用户根本用不到。`display_na
   false，于是每个模型都被钉在 200K。此处改为默认开启该偏好：Qoder 客户端本来就提供
   200K / 400K / 1M 三档，网关接受最大值，所以没有可达开关时 1M 才是账号实际跑的窗口。
   目录未公布窗口的条目（如 `Auto`）仍回落到目录的 `defaultContextWindow`。
-- **刻意不声明 `maxTokens`。** 一旦声明，pi-ai 会把它当作输出上限发成 `max_tokens`，而推理与
-  回答共用这份预算，长回复会被从中间截断并报 `finish: max-tokens`。请求上限走
-  `options.maxTokens`，模型只广告 `contextWindow` 供 `--list-models` 显示。
+- **`maxTokens` 只广告网关的 128K 输出上限，不广告上下文窗口。** Pi 的 `--list-models` 用
+  `formatTokenCount(m.maxTokens)` 渲染 max-out 列，该函数末尾是 `count.toString()`，`undefined`
+  会直接抛错，所以这个字段必须给值。但 pi-ai 会把它原样发成 `parameters.max_tokens`，而 Qoder
+  网关对 `max_tokens > 131072` 的请求返回一个**内容为空的 200 流**，里面只有一个
+  `provider_error` / "Error in upstream response" 帧 —— 每个请求都 502，表现就是「连不上」。
+  实测（2026-10-21，`qoder-cn`）：Auto（200K）、Qwen3.8-Max（1M）、MiniMax-M3.1-Flash（200K）
+  三个模型都在 131072 成功、131073 失败，说明这条上限是网关常量，与上下文窗口无关。
+  因此 `index.js` 取 `min(contextWindow, MAX_OUTPUT_TOKENS = 131072)`（常量在
+  `lib/upstream.js`，旁边记了测量方法）。
 
-  > 0.3.3 修正：本 README 此前写成「额外广告 `maxTokens = contextWindow`」，与代码恰好相反 ——
-  > Qoder 侧一直是不声明的。留着错描述会诱导后人去「修」一个并不存在的问题。
+  > 0.3.6 修正：0.3.3 的说明写「刻意不声明 `maxTokens`」，但 `index.js` 从 0.3.0 起就一直在补这个
+  > 值，当时补的是 `contextWindow`。填成上下文窗口会让所有 200K / 1M 模型的**每一个**请求都被上游
+  > 拒绝，这正是 0.3.5 及之前「Qoder 连不上」的全部原因；`--list-models` 看起来完全正常，只有真发
+  > 请求才暴露。留着错描述会诱导后人去「修」一个并不存在的问题。
   >
-  > 注意 Trae 包的处理是**相反**的：`pi-connect-trae` 确实广告 `maxTokens`。两个包各自继承了
-  > 对应 DSH 插件的原决策，没有强行统一。
+  > 注意 Trae 包的处理是**相反**的：`pi-connect-trae` 确实广告 `maxTokens`，且没有做这道收敛。
+  > 两个包各自继承了对应 DSH 插件的原决策，没有强行统一。
 
 ## 随包 skill：查模型目录
 

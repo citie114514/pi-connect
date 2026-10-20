@@ -46,6 +46,24 @@ const MACHINE_TYPE = '5'
 const DATA_POLICY = 'disagree'
 
 /**
+ * Hard ceiling the gateway accepts for `parameters.max_tokens`.
+ *
+ * This is a property of the gateway, not of any model: every region answers a
+ * request whose `max_tokens` exceeds 128K with an in-band
+ * `provider_error` / "Error in upstream response" frame — a bare 200 stream
+ * carrying no completion at all, so it reads as an unexplained failure rather
+ * than as a validation error. Measured on 2026-10-21 against `qoder-cn`:
+ * 131072 is accepted by Auto (200K context), Qwen3.8-Max (1M) and
+ * MiniMax-M3.1-Flash (200K) alike, while 131073 is rejected by all three. The
+ * boundary is therefore the ceiling itself, not a share of the context window.
+ *
+ * Callers that must declare an output ceiling (Pi's model list has no
+ * undefined guard) clamp to this instead of to the context window, which can
+ * legitimately be 1M and is never a valid `max_tokens` here.
+ */
+export const MAX_OUTPUT_TOKENS = 131072
+
+/**
  * How long one turn may spend waiting out Qoder's queue, in total.
  *
  * The gateway answers a queued request with `10605` plus a `retryAfterSeconds`
