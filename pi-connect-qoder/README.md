@@ -129,6 +129,9 @@ Qoder 上了新模型，在包发新版之前用户根本用不到。`display_na
 ## 与 DSH 版的差异
 
 - 移除了 DSH 的设置卡片与私有 web 路由（Pi 没有对应宿主）；用量/签到改为上面的斜杠命令。
+- **默认不往控制台写东西。** Pi 的 TUI 独占终端，激活期一句 `console.info` 就会打在输入行上
+  并把它弄乱。进度信息默认静默，需要时设 `PI_CONNECT_DEBUG=1`；用户真正需要看到的失败走
+  `ctx.ui.notify`（TUI 里是提示条，不是裸 stderr）。
 - **默认广告最大上下文窗口。** DSH 的卡片里有 `useMaximumContextWindow` 开关，默认关 = 用
   Qoder 目录的 200K 默认值；Pi 没有持久化 settings 源，`preferMaximumContext({})` 永远是
   false，于是每个模型都被钉在 200K。此处改为默认开启该偏好：Qoder 客户端本来就提供

@@ -18,6 +18,7 @@
  */
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { stream, streamSimple } from "@earendil-works/pi-ai/compat";
 import {
   TRAE_PROVIDERS,
@@ -49,6 +50,87 @@ const REGION_KEYS = ["cn", "ai"];
 /** Where the plugin-owned refreshed credential copies live inside the Pi agent dir. */
 function piOwnDir() {
   return join(homedir(), ".pi", "agent", "cache", "dsh-connect-trae");
+}
+
+/**
+ * On-disk catalog cache, one file per region.
+ *
+ * `TraeCatalog` is in-memory only and seeds itself with the static fallback
+ * roster, which is four models for CN. The live directory is discovered from
+ * the SOLO endpoint, and that discovery is asynchronous — so anything that
+ * reads the model list before the first discovery lands (a fresh process, and
+ * therefore `pi --list-models`, `/scoped-models`, and the model picker on
+ * startup) only ever saw those four. The visible symptoms were "模型加载不全"
+ * and scoped-model selections that "disappear" on the next launch: the saved
+ * ids were being matched against the fallback roster, which does not contain
+ * them.
+ *
+ * Persisting the discovered roster makes the first read of a new process a
+ * synchronous hit, exactly like the Qoder port's `.qoder-catalog.*.json`.
+ */
+function catalogCachePath(region) {
+  return join(piOwnDir(), `catalog-${region}.json`);
+}
+
+/** Read the cached roster for a region, or `undefined` when unusable. */
+function loadCachedCatalog(region) {
+  const path = catalogCachePath(region);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (parsed?.version !== 1) return undefined;
+    if (!Array.isArray(parsed.models) || parsed.models.length === 0) return undefined;
+    return parsed.models;
+  } catch {
+    // A damaged cache is ignored; the next successful discovery replaces it.
+    return undefined;
+  }
+}
+
+/** Persist the roster for a region. Best-effort: a failure only costs a cold start. */
+function saveCachedCatalog(region, models, logger) {
+  const path = catalogCachePath(region);
+  const tmp = `${path}.tmp`;
+  try {
+    mkdirSync(piOwnDir(), { recursive: true });
+    writeFileSync(tmp, JSON.stringify({ version: 1, savedAt: Date.now(), models }, null, 2), "utf8");
+    renameSync(tmp, path);
+  } catch (error) {
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp);
+    } catch {
+      // Leftover temp file is inert.
+    }
+    logger?.warn?.(`trae: could not save catalog for ${region}`, error);
+  }
+}
+
+/**
+ * Logger that keeps quiet unless `PI_CONNECT_DEBUG=1`.
+ *
+ * Pi's TUI owns the terminal: a stray `console.info` during activation prints
+ * over the input line and leaves it corrupted — the "打开 cli 时在输入栏弹出加载
+ * 信息" complaint. Progress chatter therefore goes nowhere by default, and
+ * anything the user actually needs to see is delivered through
+ * `ctx.ui.notify`, which the TUI renders as a toast instead of raw stderr.
+ *
+ * `error` stays enabled unconditionally: it is only reached from the
+ * activation-failure path, where `ctx.ui` does not exist yet and silence would
+ * mean "no models and no explanation".
+ */
+function createLogger() {
+  if (process.env.PI_CONNECT_DEBUG !== "1") {
+    return {
+      info: () => {},
+      warn: () => {},
+      error: (message, detail) => console.error(`[dsh-connect-trae] ${message}`, detail ?? ""),
+    };
+  }
+  return {
+    warn: (message, detail) => console.warn(`[dsh-connect-trae] ${message}`, detail ?? ""),
+    info: (message) => console.info(`[dsh-connect-trae] ${message}`),
+    error: (message, detail) => console.error(`[dsh-connect-trae] ${message}`, detail ?? ""),
+  };
 }
 
 /**
@@ -130,6 +212,15 @@ class RegionStack {
   }
 
   /**
+   * Replace the roster and persist it, so the next process starts from the
+   * live list instead of the static fallback.
+   */
+  commitCatalog(models) {
+    this.catalog.set(models);
+    saveCachedCatalog(this.region, this.catalog.current(), this.logger);
+  }
+
+  /**
    * Make the region ready to serve a request: shim listening + the wire map
    * (model id → Trae `config_name`/function) discovered at least once.
    *
@@ -144,7 +235,7 @@ class RegionStack {
       this.modelsReady = this.discoverModels()
         .then((models) => {
           if (models.length > 0) {
-            this.catalog.set(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
+            this.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
           }
           return true;
         })
@@ -322,7 +413,7 @@ function createTraePiProvider(stack, logger) {
       try {
         const models = await stack.discoverModels(context.signal);
         if (context.signal.aborted) return;
-        stack.catalog.set(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
+        stack.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
         if (context.signal.aborted) return;
         const list = buildModels();
         await context.publish({
@@ -342,24 +433,30 @@ function createTraePiProvider(stack, logger) {
 
 /** Pi extension factory. */
 export default async function activate(pi) {
-  const logger = {
-    warn: (message, detail) => console.warn(`[dsh-connect-trae] ${message}`, detail ?? ""),
-    info: (message) => console.info(`[dsh-connect-trae] ${message}`),
-    error: (message, detail) => console.error(`[dsh-connect-trae] ${message}`, detail ?? ""),
-  };
+  const logger = createLogger();
 
   const stacks = [];
   try {
     for (const region of REGION_KEYS) {
-      // The factory registers the provider and seeds the static fallback
-      // catalog only. Per Pi's extension contract it starts no socket here:
-      // the shim is opened from `session_start` or on the first model request.
+      // The factory registers the provider and seeds the catalog from the last
+      // discovered roster (or the static fallback on a cold start). Per Pi's
+      // extension contract it starts no socket here: the shim is opened from
+      // `session_start` or on the first model request.
       const stack = new RegionStack(region, logger);
-      stack.catalog.set(fallbackModelsFor(region));
+      const cached = loadCachedCatalog(region);
+      if (cached === undefined) {
+        stack.catalog.set(fallbackModelsFor(region));
+      } else {
+        try {
+          stack.catalog.set(cached);
+        } catch {
+          stack.catalog.set(fallbackModelsFor(region));
+        }
+      }
       stacks.push(stack);
       pi.registerProvider(createTraePiProvider(stack, logger));
       logger.info(
-        `registered provider ${TRAE_PROVIDERS[region]} (${TRAE_PROVIDER_DISPLAY_NAMES[region]}) with ${stack.catalog.current().length} fallback models`,
+        `registered provider ${TRAE_PROVIDERS[region]} (${TRAE_PROVIDER_DISPLAY_NAMES[region]}) with ${stack.catalog.current().length} models`,
       );
     }
   } catch (error) {
@@ -368,23 +465,30 @@ export default async function activate(pi) {
 
   // Warm each region's shim once a session exists (and only then — a
   // session-less invocation such as `pi --list-models` must not open sockets).
-  pi.on?.("session_start", async () => {
-    for (const stack of stacks) {
-      try {
-        let credential;
+  //
+  // Failures surface through `ctx.ui.notify` rather than the console: writing
+  // to stderr while the TUI owns the screen prints over the input line, which
+  // is what "打开 cli 时在输入栏弹出加载信息" was.
+  pi.on?.("session_start", async (_event, ctx) => {
+    await Promise.all(
+      stacks.map(async (stack) => {
         try {
-          credential = await stack.store.resolve();
+          let credential;
+          try {
+            credential = await stack.store.resolve();
+          } catch (error) {
+            if (error instanceof Error && error.message.startsWith("trae: no signed-in account")) return;
+            throw error;
+          }
+          if (credential === undefined) return;
+          await stack.ensureReady();
+          logger.info(`ready: ${TRAE_PROVIDERS[stack.region]} (${stack.catalog.current().length} models)`);
         } catch (error) {
-          if (error instanceof Error && error.message.startsWith("trae: no signed-in account")) continue;
-          throw error;
+          logger.warn(`trae ${stack.region}: shim/catalog warm-up failed`, error);
+          ctx?.ui?.notify?.(`Trae ${stack.region}: 预热失败，模型可能不可用（${error?.message ?? error}）`, "warning");
         }
-        if (credential === undefined) continue;
-        await stack.ensureReady();
-        logger.info(`ready: ${TRAE_PROVIDERS[stack.region]} (${stack.catalog.current().length} models)`);
-      } catch (error) {
-        logger.warn(`trae ${stack.region}: shim/catalog warm-up failed`, error);
-      }
-    }
+      }),
+    );
   });
 
   // Daily check-in / usage, surfaced as Pi slash commands.

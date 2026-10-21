@@ -1605,15 +1605,6 @@ function createTraeShim(options) {
 					return writeError(res, 400, "invalid_json", "Request body must be valid JSON");
 				}
 				const parsed = JSON.parse(raw);
-				options.logger?.warn("dsh-connect-trae: chat request received", {
-					model: parsed.model,
-					messages: Array.isArray(parsed.messages) ? parsed.messages.map((message) => typeof message === "object" && message !== null ? message["role"] ?? "?" : "?") : "(none)",
-					toolCount: Array.isArray(parsed.tools) ? parsed.tools.length : 0,
-					maxTokens: parsed.max_tokens,
-					reasoningEffort: parsed.reasoning_effort,
-					temperature: parsed.temperature,
-					bodyBytes: raw.length
-				});
 				const controller = new AbortController();
 				const abort = () => controller.abort();
 				req.once("aborted", abort);

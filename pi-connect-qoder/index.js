@@ -68,6 +68,34 @@ const CATALOG_REFRESH_TIMEOUT_MS = 5000;
 const CATALOG_RETRY_AFTER_FAILURE_MS = 60 * 1000;
 
 /**
+ * Logger that keeps quiet unless `PI_CONNECT_DEBUG=1`.
+ *
+ * Pi's TUI owns the terminal: a stray `console.info` during activation prints
+ * over the input line and leaves it corrupted. Progress chatter therefore goes
+ * nowhere by default, and anything the user actually needs to see is delivered
+ * through `ctx.ui.notify`, which the TUI renders as a toast instead of raw
+ * stderr.
+ *
+ * `error` stays enabled unconditionally: it is only reached from the
+ * activation-failure path, where `ctx.ui` does not exist yet and silence would
+ * mean "no models and no explanation".
+ */
+function createLogger() {
+  if (process.env.PI_CONNECT_DEBUG !== "1") {
+    return {
+      info: () => {},
+      warn: () => {},
+      error: (message, detail) => console.error(`[dsh-connect-qoder] ${message}`, detail ?? ""),
+    };
+  }
+  return {
+    warn: (message, detail) => console.warn(`[dsh-connect-qoder] ${message}`, detail ?? ""),
+    info: (message) => console.info(`[dsh-connect-qoder] ${message}`),
+    error: (message, detail) => console.error(`[dsh-connect-qoder] ${message}`, detail ?? ""),
+  };
+}
+
+/**
  * One region's runtime: credential cache + catalog + shim + provider state.
  */
 class RegionRuntime {
@@ -284,11 +312,7 @@ function createQoderPiProvider(runtime, logger) {
  * Pi extension factory. `pi` is the extension API; `ctx` is not used.
  */
 export default async function activate(pi) {
-  const logger = {
-    warn: (message, detail) => console.warn(`[dsh-connect-qoder] ${message}`, detail ?? ""),
-    info: (message) => console.info(`[dsh-connect-qoder] ${message}`),
-    error: (message, detail) => console.error(`[dsh-connect-qoder] ${message}`, detail ?? ""),
-  };
+  const logger = createLogger();
   setCredentialDiagnosticSink((message) => logger.warn(message));
   try {
     sweepStaleOscryptDirs();
@@ -321,7 +345,7 @@ export default async function activate(pi) {
   // machine), and running them back to back put both waits in front of the
   // user's first message. They touch disjoint state, so there is nothing to
   // serialise.
-  pi.on?.("session_start", async () => {
+  pi.on?.("session_start", async (_event, ctx) => {
     await Promise.all(
       runtimes.map(async (runtime) => {
         try {
@@ -332,6 +356,12 @@ export default async function activate(pi) {
           logger.info(`ready: ${runtime.region.id} (${runtime.catalog.current().length} models)`);
         } catch (error) {
           logger.warn(`${runtime.region.displayName}: shim/catalog warm-up failed`, error);
+          // The console is silent by default, so a warm-up failure that the
+          // user needs to act on goes through the TUI instead.
+          ctx?.ui?.notify?.(
+            `${runtime.region.displayName} 预热失败，模型可能不可用（${error?.message ?? error}）`,
+            "warning",
+          );
         }
       }),
     );

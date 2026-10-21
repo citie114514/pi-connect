@@ -68,6 +68,15 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 
 ## 与 DSH 版的差异
 
+- **模型目录会落盘缓存**（`~/.pi/agent/cache/dsh-connect-trae/catalog-<region>.json`）。
+  `TraeCatalog` 本身只在内存里、且以 4 条静态 fallback 起步，而实时目录是异步发现的 ——
+  任何在发现落地之前读模型清单的路径（新进程、`pi --list-models`、`/scoped-models`、
+  启动时的模型选择器）都只能看到那 4 条。表现就是「模型加载不全」（`qwen3.8-max` 这类
+  模型不在列表里）和「scoped-models 重启后丢失」（保存的 id 拿 fallback 名单去匹配，
+  自然匹配不上）。现在每次发现成功都写盘，新进程首次读取是同步命中，和 Qoder 版一致。
+- **默认不往控制台写东西。** Pi 的 TUI 独占终端，激活期一句 `console.info` 就会打在输入行上
+  并把它弄乱。进度信息默认静默，需要时设 `PI_CONNECT_DEBUG=1`；用户真正需要看到的失败走
+  `ctx.ui.notify`（TUI 里是提示条，不是裸 stderr）。
 - 移除了 DSH 的设置卡片与私有 web 路由；用量/签到改为上面的斜杠命令。
 - **默认广告最大上下文窗口。** DSH 的卡片里有按模型选择 dev / Max 窗口的上下文预算，Pi
   没有对应 UI，于是每行都停在目录的 dev 窗口（200K / 256K）。此处在 Trae 公布 Max 时
@@ -98,6 +107,14 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 # 需要在 <DSH_HOME>/profiles/desktop/node_modules/dsh-connect-trae 存在
 node build-core.mjs
 ```
+
+> ⚠️ **当前不要直接重建。** 仓库里这份 `lib/trae-core.js` 已经比 `build-core.mjs` 的产物多出
+> 约 840 行（41 处差异），主要集中在模型 `multimodal` 标志驱动的图像输入（issue #16）等改动上
+> ——那些是直接改在产物上的，脚本还没有对应的补丁步骤。直接跑 `node build-core.mjs` 会把这些
+> 改动抹掉。要重建，先把这些差异补进脚本，再对比产物确认无回退。
+>
+> 脚本已经包含「删掉每请求调试输出」这一步（`4e`），所以重建至少不会把 issue #1 里那条
+> `chat request received {...}` 带回来。
 
 ## 许可
 

@@ -205,6 +205,33 @@ const FB_DST = `const FALLBACK_TRAE_MODELS = [
 ];`;
 text = text.slice(0, fbStart) + FB_DST + text.slice(fbEnd + 3);
 
+// --- 4e. Drop the per-request debug dump ---
+// The DSH bundle logs every chat request through `logger.warn`:
+//
+//   options.logger?.warn("dsh-connect-trae: chat request received", { model, ... })
+//
+// In DSH that lands in a log pane. In Pi the same call goes to `console.warn`,
+// and the TUI owns the terminal: the object printed straight into the message
+// area on every single turn (reported as issue #1 with a screenshot). It is a
+// debugging leftover with no diagnostic value in steady state, so the whole
+// statement is removed rather than demoted — `PI_CONNECT_DEBUG` in index.js
+// already covers "I want to see what the plugin is doing".
+const DEBUG_LOG_ANCHOR = 'options.logger?.warn("dsh-connect-trae: chat request received", {';
+const debugLines = text.split("\n");
+const debugStart = debugLines.findIndex((l) => l.includes(DEBUG_LOG_ANCHOR));
+if (debugStart < 0) throw new Error("chat-request debug log not found");
+let debugEnd = -1;
+for (let i = debugStart + 1; i < debugLines.length; i++) {
+  if (/^\t{4}\}\);$/.test(debugLines[i])) {
+    debugEnd = i;
+    break;
+  }
+}
+if (debugEnd < 0) throw new Error("chat-request debug log close not found");
+debugLines.splice(debugStart, debugEnd - debugStart + 1);
+text = debugLines.join("\n");
+if (text.includes("chat request received")) throw new Error("chat-request debug log still present");
+
 // --- 5. Strip the DSH-only regions, keep the protocol core + usage/check-in logic ---
 // Kept: everything through `src/web-status.ts` (usage client, check-in status,
 // credit/check-in projection helpers used by the Pi commands).
