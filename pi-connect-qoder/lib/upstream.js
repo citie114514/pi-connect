@@ -1129,7 +1129,38 @@ export async function* streamChat(region, credential, request, signal) {
   }
 
   const url = chatUrl(region)
-  const bodyBytes = encodeBody(Buffer.from(JSON.stringify(body)))
+
+  /**
+   * Encode one attempt's body.
+   *
+   * Every attempt gets its own `request_id` and its own `business.id`, while
+   * `request_set_id` / `chat_record_id` stay fixed for the turn: those two name
+   * the *turn*, `request_id` names one *submission* of it.
+   *
+   * This used to be a single `bodyBytes` computed once and reused for every
+   * retry, which meant a queued turn resent a byte-identical duplicate of a
+   * request the gateway had already parked. The queue answer never changed, so
+   * the caller could wait out its whole budget, hand a 503 to the host, and
+   * watch the host retry with the same duplicate again — which is exactly the
+   * "Qoder is busy — the request was queued" loop that never cleared.
+   *
+   * `is_retry` stays `false` on purpose. Rotating the id already makes each
+   * attempt a distinct submission, which is the property that matters; claiming
+   * "this is a retry of record X" while presenting a fresh id is a claim the
+   * gateway may validate, and there is no way to verify its handling of that
+   * flag without reproducing a queue. `business.begin_at` keeps the turn's
+   * original start for the same reason the set id does: this is one turn.
+   */
+  const bodyFor = () =>
+    encodeBody(
+      Buffer.from(
+        JSON.stringify({
+          ...body,
+          request_id: crypto.randomUUID(),
+          business: { ...body.business, id: crypto.randomUUID() },
+        }),
+      ),
+    )
 
   /**
    * Open one attempt and hand back its frame stream.
@@ -1211,7 +1242,7 @@ export async function* streamChat(region, credential, request, signal) {
   }
 
   /** Send one request. Throws for terminal failures, returns the open stream. */
-  async function openAttempt() {
+  async function openAttempt(bodyBytes) {
     let response
     // Build headers outside the try so that a programming error (e.g.
     // `credential` is undefined) throws directly rather than being caught
@@ -1332,7 +1363,7 @@ export async function* streamChat(region, credential, request, signal) {
     // attempt could spend unbounded time without ever exhausting it.
     const attemptStartedAt = Date.now()
     try {
-      stream = readFrames(await openAttempt())
+      stream = readFrames(await openAttempt(bodyFor()))
       // Pull the first frame before committing to a response, so a queue
       // rejection surfaces here rather than mid-stream where it could not be
       // retried without duplicating output.
@@ -1384,9 +1415,18 @@ export async function* streamChat(region, credential, request, signal) {
  */
 class QueueRejection extends Error {
   constructor(retryAfterSeconds, detail) {
+    // The wording is load-bearing, not cosmetic. Pi decides whether to retry a
+    // failed turn by matching the error TEXT against a keyword list
+    // (`isRetryableAssistantError` in pi-ai: "rate limit", "too many requests",
+    // "503", "overloaded", …) — unlike DSH, which retries on the status code.
+    // The previous wording ("Qoder is busy — the request was queued") matched
+    // none of them, so a queued turn that outlived the plugin's own wait budget
+    // was reported as a hard failure instead of being retried. Verified against
+    // pi-ai 0.87.1: the bare sentence is non-retryable, the same sentence with
+    // "rate limit" in it is retryable.
     super(
-      `Qoder is busy — the request was queued` +
-        `${retryAfterSeconds > 0 ? ` (retry in ~${retryAfterSeconds}s)` : ''}`,
+      `Qoder is busy — the request was queued (rate limit` +
+        `${retryAfterSeconds > 0 ? `, retry in ~${retryAfterSeconds}s` : ''})`,
     )
     this.name = 'QueueRejection'
     this.retryable = true

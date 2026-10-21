@@ -58,6 +58,29 @@ OSCrypt 密钥），**不写入应用文件、不启动 OAuth**。没有桌面�
 - 两个区域的预热并发执行，不再把两次凭据读取（各约 0.6 s）串行摆在第一条消息前面。
 - 目录未过期时（30 min TTL）刷新直接短路，不产生任何网络请求。
 
+## 排队（`Qoder is busy`）
+
+Qoder 网关满载时不是拒绝请求，而是把它挂进队列，回一帧
+`10605` / `Qoder is busy — the request was queued (rate limit, retry in ~30s)`。
+插件自己把这段等待吃掉（预算 120 s），所以正常情况下用户只会觉得慢，不会看到报错。
+
+这一块修过两个问题，都是「看起来像网关的问题、实际是本地实现」：
+
+1. **重试发的是逐字节相同的请求。** 以前 `bodyBytes` 在重试循环外算一次，每次尝试复用，
+   连 `request_id` 都不变 —— 网关看到的是同一个已被挂起的请求的重复副本，队列状态自然
+   永远不变。现在每次尝试换 `request_id` 与 `business.id`，`request_set_id` /
+   `chat_record_id` 保持不动（它们标识的是**回合**，不是某次提交），`business.begin_at`
+   也保留回合原始时间。`is_retry` 仍是 `false`：换 id 已经让每次尝试成为一次独立提交，
+   而声称「这是记录 X 的重试」是网关可能校验的声明，在没有排队环境可复现的前提下不去赌。
+2. **错误文案不在 Pi 的重试关键词表里。** Pi 判定是否重试靠的是
+   `isRetryableAssistantError` 对错误文本做正则匹配（`rate limit` / `too many requests` /
+   `503` / `overloaded` …），而 DSH 是按状态码。旧文案 `Qoder is busy — the request was
+   queued` 一个关键词都不含，于是预算耗尽后被当成硬失败直接抛给用户，而同样的情形 DSH
+   会继续重试。现在文案里带 `rate limit`。
+
+预算耗尽后交给宿主重试：Pi 默认 3 次（`settings.retry.maxRetries`），DSH 默认 5 次 ——
+这是「DSH 好像不会报这个错」的最后一层差别。
+
 ## 命令
 
 | 命令 | 作用 |
