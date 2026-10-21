@@ -46,6 +46,19 @@ const MACHINE_TYPE = '5'
 const DATA_POLICY = 'disagree'
 
 /**
+ * Ceiling for the model-list request when the caller supplies no signal.
+ *
+ * The catalog refresh runs on the *request* path here — `auth.apiKey.resolve`
+ * awaits it before the shim is handed a token — so an unbounded `fetch` is not
+ * a cosmetic risk: a gateway that accepts the connection and then never answers
+ * (firewall, corporate proxy, no route) leaves the user staring at "waiting for
+ * model" with the request not yet sent. The Pi port shipped exactly that bug;
+ * the Cyrene port had already closed it. Callers that want a tighter bound pass
+ * their own signal, and `refreshCatalog` does.
+ */
+const CATALOG_TIMEOUT_MS = 30000
+
+/**
  * Hard ceiling the gateway accepts for `parameters.max_tokens`.
  *
  * This is a property of the gateway, not of any model: every region answers a
@@ -825,7 +838,8 @@ export async function fetchModels(region, credential, signal) {
     method: 'GET',
     headers: { Accept: 'application/json', ...headers },
     redirect: 'error',
-    signal,
+    // Never `undefined`: an unbounded fetch here can outlive the caller.
+    signal: signal ?? AbortSignal.timeout(CATALOG_TIMEOUT_MS),
   })
   if (!response.ok) {
     throw new Error(`Qoder model list failed: HTTP ${response.status} ${(await response.text()).slice(0, 300)}`)

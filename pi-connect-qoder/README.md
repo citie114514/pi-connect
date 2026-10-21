@@ -30,6 +30,34 @@ Pi 模型运行时（openai-completions API）
 OSCrypt 密钥），**不写入应用文件、不启动 OAuth**。没有桌面登录时可用 `QODERCN_PAT` /
 `QODER_PAT` 环境变量兜底。
 
+## 延迟：钱花在哪一段
+
+本机实测（2026-10-21，Pi 0.87.1，`qoder-cn`）：
+
+| 环节 | 耗时 |
+| --- | --- |
+| 模型请求本身（经 shim 的首字节） | 332–1151 ms |
+| 同一请求结束 | 0.8–2.7 s |
+| 目录拉取（`fetchModels`） | 256–534 ms |
+| 凭据首次读取（DPAPI + SQLite） | ~573 ms，之后缓存命中 0 ms |
+| 开思考档（`effort=high` 对比不开） | 首字节约 +0.5 s |
+| **Pi 启动（全部扩展）** | **~8.2 s** |
+
+启动的 8.2 s 里，Pi 自身地板约 2.8 s，扩展导入合计约 2.7 s（本插件 0.59 s，其余是
+`pi-subagents` 0.80 s、`pi-wechat-assistant` 0.70 s、`pi-mcp-adapter` 0.22 s、
+`pi-goal-x` 0.22 s），剩余在会话运行时初始化（MCP 等）。**如果觉得「打开 Pi 很慢」，
+瓶颈在启动而非 Qoder 请求**，关掉用不到的扩展比调模型参数有效得多。
+
+本插件能控制的那部分已经收紧：
+
+- 目录刷新有 5 s 上限（`CATALOG_REFRESH_TIMEOUT_MS`），且失败后 60 s 内不再重试
+  （`CATALOG_RETRY_AFTER_FAILURE_MS`）。这两条不是洁癖：`refreshCatalog` 是在
+  `auth.apiKey.resolve` 里 **await** 的，跑在请求发出之前，所以它的超时会直接加在每个
+  回合上；`fetchModels` 早期版本没有自己的 signal 兜底，网关一旦黑洞化（防火墙、代理、
+  无路由）就是「等待模型卡半天」，请求根本没发出去。
+- 两个区域的预热并发执行，不再把两次凭据读取（各约 0.6 s）串行摆在第一条消息前面。
+- 目录未过期时（30 min TTL）刷新直接短路，不产生任何网络请求。
+
 ## 命令
 
 | 命令 | 作用 |

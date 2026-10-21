@@ -55,6 +55,19 @@ function catalogRoot() {
 }
 
 /**
+ * How long the model-list request may take before the cached catalog is used.
+ *
+ * `refreshCatalog` is awaited from `auth.apiKey.resolve`, i.e. before the model
+ * request is even sent, so its budget is subtracted from every turn. The
+ * healthy round trip measured 0.26–0.53 s, so this is roughly ten times the
+ * working case and still short enough to be invisible next to a model call.
+ */
+const CATALOG_REFRESH_TIMEOUT_MS = 5000;
+
+/** How long to keep serving the cached catalog after a failed refresh. */
+const CATALOG_RETRY_AFTER_FAILURE_MS = 60 * 1000;
+
+/**
  * One region's runtime: credential cache + catalog + shim + provider state.
  */
 class RegionRuntime {
@@ -72,6 +85,8 @@ class RegionRuntime {
     });
     this.shim = undefined;
     this.disposed = false;
+    /** When the last catalog refresh failed; drives the retry backoff below. */
+    this.catalogFailedAt = 0;
   }
 
   /** Start the loopback shim; called only when a session or a request needs it. */
@@ -130,13 +145,26 @@ class RegionRuntime {
   /** Fetch a fresh catalog and keep the last good one on failure. */
   async refreshCatalog(signal) {
     if (this.catalog.fresh()) return;
+    // A failed refresh must not be retried on every single request. The cached
+    // catalog is still perfectly usable, so a gateway that is refusing or
+    // black-holing the model list would otherwise add its timeout to every
+    // turn — which is what "waiting for model" hanging for ages actually was.
+    if (Date.now() - this.catalogFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return;
     const credential = await this.resolveCredential();
     if (credential === undefined) return;
+    // Bounded regardless of what the caller passed: this runs *before* the
+    // request is sent (`auth.apiKey.resolve` awaits it), so it may never be the
+    // reason a turn stalls. Five seconds is ten times the healthy round trip.
+    const deadline = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS)])
+      : AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS);
     try {
-      const raw = await fetchModels(this.region, credential, signal);
+      const raw = await fetchModels(this.region, credential, deadline);
       const entries = raw.map(normalizeEntry);
       if (entries.length > 0) this.catalog.replace(entries);
+      this.catalogFailedAt = 0;
     } catch (error) {
+      this.catalogFailedAt = Date.now();
       this.logger?.warn?.(
         `dsh-connect-qoder[pi]: ${this.region.displayName} catalog refresh failed; serving cached catalog`,
         error,
@@ -287,18 +315,26 @@ export default async function activate(pi) {
 
   // Warm each region's shim once a session exists (and only then — a
   // session-less invocation such as `pi --list-models` must not open sockets).
+  //
+  // The regions are warmed concurrently rather than in a loop: each one's first
+  // step is a credential read that spawns a DPAPI helper (~0.6 s on this
+  // machine), and running them back to back put both waits in front of the
+  // user's first message. They touch disjoint state, so there is nothing to
+  // serialise.
   pi.on?.("session_start", async () => {
-    for (const runtime of runtimes) {
-      try {
-        const credential = await runtime.resolveCredential();
-        if (credential === undefined || credential.expired === true) continue;
-        await runtime.ensureShim();
-        await runtime.refreshCatalog();
-        logger.info(`ready: ${runtime.region.id} (${runtime.catalog.current().length} models)`);
-      } catch (error) {
-        logger.warn(`${runtime.region.displayName}: shim/catalog warm-up failed`, error);
-      }
-    }
+    await Promise.all(
+      runtimes.map(async (runtime) => {
+        try {
+          const credential = await runtime.resolveCredential();
+          if (credential === undefined || credential.expired === true) return;
+          await runtime.ensureShim();
+          await runtime.refreshCatalog();
+          logger.info(`ready: ${runtime.region.id} (${runtime.catalog.current().length} models)`);
+        } catch (error) {
+          logger.warn(`${runtime.region.displayName}: shim/catalog warm-up failed`, error);
+        }
+      }),
+    );
   });
 
   // Quota / daily check-in, surfaced as Pi slash commands.
