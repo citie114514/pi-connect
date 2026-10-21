@@ -48,7 +48,10 @@ const check = (label, ok, detail) => {
 
   const usage = tools.find((t) => t.id === 'ide-account-bridge_usage');
   const checkin = tools.find((t) => t.id === 'ide-account-bridge_checkin');
-  check('usage 工具声明为只读（risk=network, effectKind=read）', usage?.risk === 'network' && usage?.effectKind === 'read');
+  // `risk` 是 `shell` 而不是 `network`：读凭据要起一个 DPAPI 子进程，维护者
+  // 在 1.1.0 的审核里明确要求按能力上限声明。`effectKind` 仍是 `read` —— 这条
+  // 工具只读，不改账号状态。
+  check('usage 工具声明为只读（risk=shell, effectKind=read）', usage?.risk === 'shell' && usage?.effectKind === 'read');
   check('checkin 工具声明为改状态（effectKind=external_side_effect）', checkin?.effectKind === 'external_side_effect');
   check('checkin 工具要求 confirm 参数', Array.isArray(checkin?.inputSchema?.required) && checkin.inputSchema.required.includes('confirm'));
   check('每个工具都有 inputSchema 与 description', tools.every((t) => t.inputSchema?.type === 'object' && typeof t.description === 'string' && t.description.length > 0));

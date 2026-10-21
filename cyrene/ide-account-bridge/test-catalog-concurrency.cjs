@@ -184,6 +184,88 @@ const settle = async () => {
     check('modelsReady 为 true', () => assert.strictEqual(stack.modelsReady, true))
   }
 
+  // ---------------------------------------------------------------
+  // Qoder 侧：review 指出「Trae 修好了，Qoder 路径还有同样的问题」。Qoder 的
+  // 刷新不走 discoverModels，而是 resolveCredential + fetchModels，所以这里
+  // 用「凭据解析被调用几次」来数发起趟数——它在联网之前，天然是个可数的锚点。
+  const makeQoder = async () => {
+    const { RegionRuntime } = await import('./src/qoder/runtime.js')
+    const runtime = new RegionRuntime(
+      { id: 'qoder-cn', displayName: 'Qoder CN' },
+      { warn() {} },
+      process.cwd(),
+      undefined,
+      0,
+    )
+    let fresh = false
+    const state = { resolves: 0 }
+    runtime.catalog = {
+      fresh: () => fresh,
+      current: () => [],
+      replace: () => {},
+    }
+    // 在 fetchModels 之前停下：这些用例只验证「谁发起」，不联网。
+    runtime.resolveCredential = async () => {
+      state.resolves += 1
+      return undefined
+    }
+    return { runtime, state, setFresh: (v) => { fresh = v } }
+  }
+
+  console.log('\n[6] Qoder：并发刷新只发起一趟')
+  {
+    const { runtime, state } = await makeQoder()
+    const a = runtime.refreshCatalog()
+    const shared = runtime.catalogPending
+    const b = runtime.refreshCatalog()
+    const c = runtime.refreshCatalog()
+
+    check('并发三次只解析一次凭据', () => {
+      assert.strictEqual(state.resolves, 1, `实际 ${state.resolves} 次`)
+    })
+    check('首次调用登记了在途 promise', () => {
+      assert.ok(shared, 'catalogPending 为空')
+    })
+
+    await Promise.all([a, b, c])
+    check('结算后在途 promise 已释放', () => {
+      assert.strictEqual(runtime.catalogPending, undefined)
+    })
+
+    const d = runtime.refreshCatalog()
+    check('释放后下一次调用能重新发起', () => {
+      assert.strictEqual(state.resolves, 2, `实际 ${state.resolves} 次`)
+    })
+    await d
+  }
+
+  console.log('\n[7] Qoder：TTL 保鲜期内是零成本 no-op')
+  {
+    const { runtime, state, setFresh } = await makeQoder()
+    setFresh(true)
+    await runtime.refreshCatalog()
+    check('保鲜期内不解析凭据', () => {
+      assert.strictEqual(state.resolves, 0, `实际 ${state.resolves} 次`)
+    })
+    check('保鲜期内不登记在途 promise', () => {
+      assert.strictEqual(runtime.catalogPending, undefined)
+    })
+  }
+
+  console.log('\n[8] Qoder：过期 + 在途时，后到者复用在途而不是另起一趟')
+  {
+    // review 描述的最坏时序：目录过期 → A 发起 → 上游目录变化 → B 到达。
+    // B 若另起一趟，两趟结果就会倒序覆盖，旧结果还会被重新缓存 30 分钟。
+    const { runtime, state } = await makeQoder()
+    const a = runtime.refreshCatalog()
+    const b = runtime.refreshCatalog()
+    const c = runtime.refreshCatalog()
+    check('过期且已有在途刷新时只发起一趟', () => {
+      assert.strictEqual(state.resolves, 1, `实际 ${state.resolves} 次`)
+    })
+    await Promise.all([a, b, c])
+  }
+
   console.log(`\n${failures === 0 ? 'PASS  并发刷新符合预期' : `FAIL  ${failures} 项未通过`}`)
   process.exit(failures === 0 ? 0 : 1)
 })().catch((error) => {
