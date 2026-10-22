@@ -1950,7 +1950,12 @@ var TraeSoloUpstreamClient = class {
 			this.collectModels(list, directoryFunction, byId);
 		}
 		const models = [...byId.values()];
-		if (models.length === 0) throw new Error(`Trae SOLO models response contained no models (${failures.join("; ") || "empty directory"})`);
+		// A partial union is not a directory: the failed function's models
+		// would silently disappear from the roster, and a surviving model could
+		// lose its `config_name`/function mapping. Throwing keeps the last good
+		// directory and lets the next request retry.
+		if (failures.length > 0) throw new Error(`Trae SOLO models directory incomplete (${failures.join("; ")})`);
+		if (models.length === 0) throw new Error("Trae SOLO models response contained no models (empty directory)");
 		return models;
 	}
 	/** Merge one function's config list into the shared catalogue (first wins). */

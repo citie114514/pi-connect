@@ -47,6 +47,9 @@ import { registerTraeCommands } from "./commands.js";
 /** Every region, matching the DSH bundle's card tab order. */
 const REGION_KEYS = ["cn", "ai"];
 
+/** How long a discovered Trae model directory stays fresh before rediscovery. */
+const CATALOG_TTL_MS = 30 * 60 * 1000;
+
 /** Where the plugin-owned refreshed credential copies live inside the Pi agent dir. */
 function piOwnDir() {
   return join(homedir(), ".pi", "agent", "cache", "dsh-connect-trae");
@@ -140,6 +143,16 @@ class RegionStack {
   constructor(region, logger) {
     this.region = region;
     this.logger = logger;
+    /** When the current model directory was discovered; 0 means never. */
+    this.modelsDiscoveredAt = 0;
+    /**
+     * Whether a non-empty directory has been landed at least once. Kept apart
+     * from `modelsPending` so a refresh can never mistake an in-flight
+     * discovery for an expired one and start a duplicate.
+     */
+    this.modelsReady = false;
+    /** The in-flight discovery, shared by callers that arrive during it. */
+    this.modelsPending = undefined;
     this.catalog = new TraeCatalog(region);
     this.identity = async () => {
       const store = this.store;
@@ -229,24 +242,54 @@ class RegionStack {
    * upstream answers `4001 param is invalid`. Discovery is cached after the
    * first success, and a failure resets the cache so the next request retries.
    */
-  async ensureReady() {
+  async ensureReady(signal) {
     const shim = await this.ensureShim();
-    if (this.modelsReady === undefined) {
-      this.modelsReady = this.discoverModels()
+    // One discovery at a time: a caller arriving mid-flight joins the run
+    // already in progress, so only one result ever lands.
+    if (this.modelsReady === false && this.modelsPending === undefined) {
+      const flight = this.discoverModels(signal)
         .then((models) => {
           if (models.length > 0) {
             this.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
+            // Only a success moves the clock: an empty or failed discovery must
+            // let the next request retry instead of sitting on it for 30 min.
+            this.modelsDiscoveredAt = Date.now();
+            this.modelsReady = true;
           }
           return true;
         })
         .catch((error) => {
           this.logger?.warn?.(`trae: model directory discovery failed for ${this.region}`, error);
-          this.modelsReady = undefined;
           return false;
+        })
+        .finally(() => {
+          // Only the flight that still owns the slot may release it.
+          if (this.modelsPending === flight) this.modelsPending = undefined;
         });
+      this.modelsPending = flight;
     }
-    await this.modelsReady;
+    if (this.modelsPending !== undefined) await this.modelsPending;
     return shim;
+  }
+
+  /**
+   * Re-discover the model directory when it has gone stale.
+   *
+   * The request path calls this once per `auth.apiKey.resolve`, so inside the
+   * 30-minute window it is a `Date.now()` subtraction and nothing else.
+   * `force` skips the TTL for an explicit refresh (`refreshModels`). Failures
+   * leave `modelsDiscoveredAt` untouched, so the last good directory is served
+   * and the next call retries.
+   */
+  async refreshCatalog({ force = false, signal } = {}) {
+    // A run already in the air has not landed yet; join it rather than being
+    // told "already fresh" or starting a second fetch.
+    if (this.modelsPending !== undefined) return this.modelsPending;
+    if (!force && this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
+    // Stale, or never discovered. Nothing is in flight, so clearing the memo
+    // cannot orphan a promise.
+    this.modelsReady = false;
+    return this.ensureReady(signal);
   }
 
   /**
@@ -392,9 +435,10 @@ function createTraePiProvider(stack, logger) {
           }
           if (appCredential === undefined || regionOfCredential(appCredential) !== region) return undefined;
           // The request path: start the shim on demand, make sure the wire map
-          // is loaded, and hand Pi both the bearer token and the live base URL
-          // (Pi overrides the model's baseUrl with this one before sending).
+          // is loaded, then refresh the directory if it has gone stale. Pi
+          // overrides the model's baseUrl with the returned one before sending.
           const shim = await stack.ensureReady();
+          await stack.refreshCatalog();
           const apiKey = credential?.key ?? shim.token();
           if (apiKey === undefined || apiKey.length === 0) return undefined;
           return { auth: { apiKey, baseUrl: `${shim.baseUrl()}/v1` }, source: displayName };
@@ -411,9 +455,9 @@ function createTraePiProvider(stack, logger) {
       }
       if (!context.allowNetwork || context.signal.aborted) return;
       try {
-        const models = await stack.discoverModels(context.signal);
-        if (context.signal.aborted) return;
-        stack.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
+        // Explicit refresh: skip the TTL, otherwise a directory discovered
+        // moments ago would make the user's refresh a no-op.
+        await stack.refreshCatalog({ force: true, signal: context.signal });
         if (context.signal.aborted) return;
         const list = buildModels();
         await context.publish({

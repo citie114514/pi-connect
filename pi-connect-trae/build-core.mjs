@@ -3,6 +3,8 @@
 // 2. Drop the DSH adapter region (createTraeAdapter uses PiAiAdapter)
 // 3. Patch auth paths to a Pi-owned dir
 // 4. Patch refreshNow's atomic write to plain fs
+// 4e. Drop the per-request debug dump
+// 4f. Treat a partially discovered SOLO directory as a failure
 // 5. Keep only protocol core (1-3111); strip usage/web-status/DSH entry
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -231,6 +233,26 @@ if (debugEnd < 0) throw new Error("chat-request debug log close not found");
 debugLines.splice(debugStart, debugEnd - debugStart + 1);
 text = debugLines.join("\n");
 if (text.includes("chat request received")) throw new Error("chat-request debug log still present");
+
+// --- 4f. Treat a partially discovered directory as a failure ---
+// The SOLO roster is split across directory functions, so a per-function
+// failure must abort the whole discovery: returning the union of the functions
+// that answered silently drops models (and their wire mappings) and caches the
+// incomplete result for 30 minutes. Same rule as the Cyrene copy.
+const SOLO_MODELS_ANCHOR = "const models = [...byId.values()];";
+const soloLines = text.split("\n");
+const soloIdx = soloLines.findIndex((l) => l.includes(SOLO_MODELS_ANCHOR));
+if (soloIdx < 0) throw new Error("SOLO models union anchor not found");
+const SOLO_EMPTY_CHECK =
+  '\t\tif (models.length === 0) throw new Error(`Trae SOLO models response contained no models (${failures.join("; ") || "empty directory"})`);';
+if (soloLines[soloIdx + 1] !== SOLO_EMPTY_CHECK) throw new Error("SOLO models empty check changed");
+soloLines.splice(
+  soloIdx + 1,
+  1,
+  '\t\tif (failures.length > 0) throw new Error(`Trae SOLO models directory incomplete (${failures.join("; ")})`);',
+  '\t\tif (models.length === 0) throw new Error("Trae SOLO models response contained no models (empty directory)");',
+);
+text = soloLines.join("\n");
 
 // --- 5. Strip the DSH-only regions, keep the protocol core + usage/check-in logic ---
 // Kept: everything through `src/web-status.ts` (usage client, check-in status,

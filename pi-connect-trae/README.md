@@ -68,6 +68,13 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
 
 ## 与 DSH 版的差异
 
+- **模型目录有 30 分钟 TTL。** 请求路径（`auth.apiKey.resolve`）在目录过期后才重新发现；
+  Pi 的显式模型刷新（`refreshModels`）传 `force`，跳过 TTL 立即刷新。此前成功发现一次后
+  `modelsReady` 永不复位，进程存活期间不会再看上游的新增/下线。
+- **目录并发刷新单飞。** 多个请求或「请求 + 显式刷新」同时到达时共用同一趟发现，
+  既不会重复拉取，也不会让晚返回的旧结果覆盖新目录。
+- **部分发现视为失败。** Trae 的目录分散在多个 function 下，任一 function 失败时整体抛错，
+  保留上一份完整目录并在下次请求重试；不再把缺模型的并集落盘并缓存 30 分钟。
 - **模型目录会落盘缓存**（`~/.pi/agent/cache/dsh-connect-trae/catalog-<region>.json`）。
   `TraeCatalog` 本身只在内存里、且以 4 条静态 fallback 起步，而实时目录是异步发现的 ——
   任何在发现落地之前读模型清单的路径（新进程、`pi --list-models`、`/scoped-models`、

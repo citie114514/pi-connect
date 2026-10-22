@@ -115,6 +115,11 @@ class RegionRuntime {
     this.disposed = false;
     /** When the last catalog refresh failed; drives the retry backoff below. */
     this.catalogFailedAt = 0;
+    /**
+     * The catalog refresh currently in the air, shared by callers that arrive
+     * while it runs. Cleared by the flight that still owns the slot.
+     */
+    this.catalogPending = undefined;
   }
 
   /** Start the loopback shim; called only when a session or a request needs it. */
@@ -170,14 +175,39 @@ class RegionRuntime {
     return this.catalog.current().find((entry) => entry.id === modelId);
   }
 
-  /** Fetch a fresh catalog and keep the last good one on failure. */
-  async refreshCatalog(signal) {
-    if (this.catalog.fresh()) return;
+  /**
+   * Fetch a fresh catalog and keep the last good one on failure.
+   *
+   * Single-flight: `auth.apiKey.resolve` and `refreshModels` can overlap (two
+   * concurrent requests, a model request during an explicit refresh). Without
+   * a shared slot each ran its own fetch and whichever *landed* last won, so a
+   * stale response could overwrite a newer directory and re-cache it for 30
+   * minutes. Sharing the in-flight promise leaves only one result to land.
+   *
+   * The signal belongs to the flight that creates the slot; a joiner is
+   * waiting on someone else's fetch and must not cancel it.
+   *
+   * `force` (explicit refresh) skips both the TTL and the failure backoff.
+   */
+  async refreshCatalog(signal, { force = false } = {}) {
+    // Checked before freshness: a run already in the air has not landed yet.
+    if (this.catalogPending !== undefined) return this.catalogPending;
+    if (!force && this.catalog.fresh()) return;
     // A failed refresh must not be retried on every single request. The cached
     // catalog is still perfectly usable, so a gateway that is refusing or
     // black-holing the model list would otherwise add its timeout to every
     // turn — which is what "waiting for model" hanging for ages actually was.
-    if (Date.now() - this.catalogFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return;
+    if (!force && Date.now() - this.catalogFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return;
+    const flight = this.fetchCatalog(signal).finally(() => {
+      // Only the flight that still owns the slot may release it.
+      if (this.catalogPending === flight) this.catalogPending = undefined;
+    });
+    this.catalogPending = flight;
+    return flight;
+  }
+
+  /** One catalog fetch. Split out so `refreshCatalog` owns only the slot. */
+  async fetchCatalog(signal) {
     const credential = await this.resolveCredential();
     if (credential === undefined) return;
     // Bounded regardless of what the caller passed: this runs *before* the
@@ -294,7 +324,9 @@ function createQoderPiProvider(runtime, logger) {
         });
       }
       if (!context.allowNetwork || context.signal.aborted) return;
-      await runtime.refreshCatalog(context.signal);
+      // Explicit refresh: skip the TTL and the failure backoff, otherwise a
+      // catalog fetched moments ago would make the user's refresh a no-op.
+      await runtime.refreshCatalog(context.signal, { force: true });
       if (context.signal.aborted) return;
       const models = buildModels();
       await context.publish({
