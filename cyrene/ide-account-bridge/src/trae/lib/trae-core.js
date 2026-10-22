@@ -1559,8 +1559,8 @@ function createTraeShim(options) {
 	// a random one rather than failing activation.
 	const injectedSecret = options?.["secret"];
 	const preferredPort = options?.["preferredPort"];
-	// Called once per request before routing, so the model directory stays
-	// current. Absent on the Pi port, which refreshes from
+	// Called before the two directory-reading routes, so the model directory
+	// stays current. Absent on the Pi port, which refreshes from
 	// `auth.apiKey.resolve()` instead.
 	const refreshCatalog = options?.["refreshCatalog"];
 	const secret = typeof injectedSecret === "string" && injectedSecret.length > 0 ? injectedSecret : randomBytes(32).toString("base64url");
@@ -1615,18 +1615,24 @@ function createTraeShim(options) {
 			if (!hostIsLoopback(req.headers.host)) return writeError(res, 403, "host_not_allowed", "Host must be loopback");
 			if (!originIsLoopback(req.headers.origin)) return writeError(res, 403, "origin_not_allowed", "Origin must be loopback");
 			if (!bearerOk(req)) return writeError(res, 401, "unauthorized", "Missing or invalid bearer");
+			const url = req.url ?? "/";
+			// Only the two routes that read the directory refresh it. `/healthz`
+			// stays local so a slow upstream refresh can never make a healthy
+			// shim time out its own health probe.
+			const catalogRoute =
+				(req.method === "GET" && (url === "/v1/models" || url === "/v1/models/")) ||
+				(req.method === "POST" && (url === "/v1/chat/completions" || url === "/v1/chat/completions/"));
 			// Keep the model directory current, the way the Pi port does from
 			// `auth.apiKey.resolve()`. TTL-gated, so it is a no-op for every
 			// request inside the window; a failure inside it is swallowed and the
 			// last good directory is served.
-			if (typeof refreshCatalog === "function") {
+			if (catalogRoute && typeof refreshCatalog === "function") {
 				try {
 					await refreshCatalog();
 				} catch (error) {
 					options?.logger?.warn?.("dsh-connect-trae: 请求前模型目录刷新失败，使用缓存目录", error);
 				}
 			}
-			const url = req.url ?? "/";
 			if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) return writeJson(res, 200, { ok: true });
 			if (req.method === "GET" && (url === "/v1/models" || url === "/v1/models/")) return writeJson(res, 200, {
 				object: "list",
@@ -2093,7 +2099,12 @@ var TraeSoloUpstreamClient = class {
 			this.collectModels(list, directoryFunction, byId);
 		}
 		const models = [...byId.values()];
-		if (models.length === 0) throw new Error(`Trae SOLO models response contained no models (${failures.join("; ") || "empty directory"})`);
+		// A partial union is not a directory: the failed function's models
+		// would silently disappear from `/v1/models`, and a model that did
+		// survive might lose its `config_name`/function mapping. Throwing
+		// leaves the last good directory in place; the next request retries.
+		if (failures.length > 0) throw new Error(`Trae SOLO models directory incomplete (${failures.join("; ")})`);
+		if (models.length === 0) throw new Error("Trae SOLO models response contained no models (empty directory)");
 		return models;
 	}
 	/** Merge one function's config list into the shared catalogue (first wins). */

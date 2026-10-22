@@ -127,8 +127,8 @@ export function createQoderShim(options) {
     invalidateCredential,
     region,
     logger,
-    // Called once per request before routing. Absent on the Pi port, which
-    // refreshes from `auth.apiKey.resolve()` instead.
+    // Called before the two directory-reading routes. Absent on the Pi port,
+    // which refreshes from `auth.apiKey.resolve()` instead.
     refreshCatalog,
     // Endpoint stability. Both are optional so the Pi port keeps its original
     // per-process behaviour; Cyrene persists them so a model profile survives a
@@ -223,19 +223,26 @@ export function createQoderShim(options) {
       writeError(res, 401, 'unauthorized', 'missing or invalid Authorization bearer')
       return
     }
+    const url = req.url ?? '/'
+    // Only the two routes that read the directory refresh it. `/healthz` must
+    // stay local: a stale directory plus a slow upstream would otherwise make a
+    // healthy shim look dead to the probe, and every probe would retry the
+    // remote fetch (Trae waits up to 30s per directory function).
+    const catalogRoute =
+      (req.method === 'GET' && (url === '/v1/models' || url === '/v1/models/')) ||
+      (req.method === 'POST' && (url === '/v1/chat/completions' || url === '/v1/chat/completions/'))
     // Keep the model directory current, the way the Pi port does from
     // `auth.apiKey.resolve()`. `refreshCatalog` is TTL-gated (30 min), so this
     // is a no-op for every request inside the window; a failure inside it is
     // swallowed and the last good catalog is served, so a dead upstream never
     // turns into a failed request.
-    if (typeof refreshCatalog === 'function') {
+    if (catalogRoute && typeof refreshCatalog === 'function') {
       try {
         await refreshCatalog()
       } catch (error) {
         logger?.warn?.(`dsh-connect-qoder: ${region.displayName} 请求前目录刷新失败，使用缓存目录`, error)
       }
     }
-    const url = req.url ?? '/'
     if (req.method === 'GET' && (url === '/healthz' || url === '/healthz/')) {
       sendJson(res, 200, { ok: true })
       return

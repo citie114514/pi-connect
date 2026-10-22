@@ -64,8 +64,25 @@ const readQoderCatalogAt = () => {
   console.log(`\nTTL 内请求：fetchedAt ${noRefreshInWindow ? '未变（正确，未做无用请求）' : `被推进 ${before} -> ${afterInWindow}`}`)
 
   // ---- 用例 2：TTL 过期的请求应触发刷新 ----
+  // 先确认健康探针不会触发这次刷新：目录过期时 /healthz 仍应是纯本地检查。
+  const healthUrl = `${region.baseUrl.replace(/\/v1\/?$/, '')}/healthz`
+  const beforeHealth = readQoderCatalogAt()
+  let healthRefreshError
   Date.now = () => realNow() + 31 * 60 * 1000
-  let refreshedAt = afterInWindow
+  try {
+    const res = await fetch(healthUrl, { headers: { Authorization: `Bearer ${region.token}` } })
+    console.log(`过期时的健康探针：HTTP ${res.status}`)
+  } catch (error) {
+    healthRefreshError = error
+  }
+  const afterHealth = readQoderCatalogAt()
+  const healthStayedLocal = afterHealth === beforeHealth
+  console.log(`健康探针后：fetchedAt ${healthStayedLocal ? '未变（正确，未触发上游刷新）' : `被推进 ${beforeHealth} -> ${afterHealth}`}`)
+  Date.now = realNow
+  if (healthRefreshError) console.log(`健康探针出错: ${healthRefreshError.message}`)
+
+  Date.now = () => realNow() + 31 * 60 * 1000
+  let refreshedAt = afterHealth
   let refreshError
   try {
     const res = await listModels()
@@ -76,16 +93,26 @@ const readQoderCatalogAt = () => {
   }
   Date.now = realNow
 
-  const refreshed = refreshedAt > afterInWindow
-  console.log(`过期请求后：fetchedAt ${afterInWindow} -> ${refreshedAt}（${refreshed ? '已推进，刷新发生' : '未推进'}）`)
+  const refreshed = refreshedAt > afterHealth
+  console.log(`过期请求后：fetchedAt ${afterHealth} -> ${refreshedAt}（${refreshed ? '已推进，刷新发生' : '未推进'}）`)
   if (refreshError) console.log(`请求出错: ${refreshError.message}`)
+
+  // ---- 用例 3：面板「刷新状态」应跳过 TTL 强制刷新 ----
+  const refreshHandler = ipcs.find((i) => i.channel === 'refresh').handler
+  const beforeForce = readQoderCatalogAt()
+  await refreshHandler()
+  const afterForce = readQoderCatalogAt()
+  // 强制刷新期间用的是真实时间；catalog 刚被上一步的 mock 时间戳写过，所以这里
+  // 只能断言「文件被重写过」，不能断言时间戳变大。
+  const forced = afterForce !== beforeForce
+  console.log(`\n刷新按钮（TTL 内）：fetchedAt ${beforeForce} -> ${afterForce}（${forced ? '已重写，强制刷新生效' : '未变'}）`)
 
   // 目录应仍然可用
   const stateAfter = await stateHandler()
   const regionAfter = stateAfter.regions.find((r) => r.regionId === 'qoder-cn')
   console.log(`刷新后模型仍在: ${regionAfter.models.length} 个`)
 
-  const pass = noRefreshInWindow && refreshed && regionAfter.models.length > 0
+  const pass = noRefreshInWindow && healthStayedLocal && refreshed && forced && regionAfter.models.length > 0
   console.log(`\n${pass ? 'PASS  目录自动刷新符合预期' : 'FAIL  目录刷新行为不符合预期'}`)
 
   await plugin.unregister()

@@ -238,7 +238,7 @@ const plugin = {
      * queue.
      */
     let warmPromise = Promise.resolve()
-    const startWarm = () => {
+    const startWarm = (force = false) => {
       warmPromise = (async () => {
         for (const runtime of qoderRuntimes) {
           try {
@@ -250,7 +250,7 @@ const plugin = {
             // `auth.apiKey.resolve` on the first model request. Cyrene has no
             // such hook, so without this the region would come up with a live
             // endpoint and zero models to pick from.
-            await runtime.refreshCatalog(deadline())
+            await runtime.refreshCatalog(deadline(), { force })
             await runtime.ensureShim()
           } catch (error) {
             logger.warn(`qoder ${runtime.region.id}: 预热失败`, error instanceof Error ? error.message : String(error))
@@ -260,7 +260,10 @@ const plugin = {
           try {
             const credential = await stack.store.resolve().catch(() => undefined)
             if (credential === undefined) continue
-            await stack.ensureReady()
+            await stack.ensureShim()
+            // `force` is what makes the panel button do what it says: without
+            // it a directory less than 30 minutes old is served unchanged.
+            await stack.refreshCatalog({ force })
           } catch (error) {
             logger.warn(`trae ${stack.region}: 预热失败`, error instanceof Error ? error.message : String(error))
           }
@@ -304,9 +307,9 @@ const plugin = {
       return readState()
     })
     ctx.registerIpc(IPC.REFRESH, async () => {
-      // `startWarm` already re-reads the Qoder catalogs and re-checks every
-      // region's shim, so there is nothing extra to do here.
-      await startWarm()
+      // Forced: the button's job is to pick up upstream changes now, not to
+      // wait out the 30-minute freshness window.
+      await startWarm(true)
       return readState()
     })
     ctx.registerIpc(IPC.USAGE, async () => ({

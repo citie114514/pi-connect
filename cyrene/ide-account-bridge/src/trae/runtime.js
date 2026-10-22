@@ -199,9 +199,12 @@ class RegionStack {
    * request retries — same "keep the last good directory" behaviour as the
    * Qoder side.
    *
+   * `force` skips the TTL check so the panel's explicit "refresh" button can
+   * pick up new models inside the 30-minute window.
+   *
    * @returns the shim when a discovery ran, or `null` when this was a no-op.
    */
-  async refreshCatalog() {
+  async refreshCatalog({ force = false } = {}) {
     // A discovery is already running: join it rather than starting a second
     // one. This matters most on the first request after start-up, when
     // `modelsDiscoveredAt` is still 0 and every concurrent caller would
@@ -209,7 +212,7 @@ class RegionStack {
     if (this.modelsPending !== undefined) return this.modelsPending;
     // Fresh: nothing to do. Checked after the in-flight case so a run that has
     // already landed is never mistaken for one still owed.
-    if (this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
+    if (!force && this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
     // Stale, or never discovered. Drop the completed memo so `ensureReady`
     // rediscovers; nothing is in flight, so this cannot orphan a promise.
     this.modelsReady = false;

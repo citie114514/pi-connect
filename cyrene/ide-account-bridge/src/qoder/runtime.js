@@ -146,12 +146,17 @@ class RegionRuntime {
    * timeout into everyone's. In practice the creator is either the warm-up
    * (which passes `ctx.signal` + `WARM_TIMEOUT_MS`) or the request path (which
    * passes nothing, and `fetchModels` then applies its own 30s ceiling).
+   *
+   * `force` skips the TTL check so the panel's explicit "refresh" button can
+   * pick up new models inside the 30-minute window. An in-flight fetch is still
+   * shared: it is already asking upstream, so a second one would only duplicate
+   * the call.
    */
-  async refreshCatalog(signal) {
+  async refreshCatalog(signal, { force = false } = {}) {
     // Checked before freshness: a run already in the air has not landed yet, so
     // its caller must join it rather than be told "already fresh".
     if (this.catalogPending !== undefined) return this.catalogPending;
-    if (this.catalog.fresh()) return;
+    if (!force && this.catalog.fresh()) return;
     const flight = this.fetchCatalog(signal).finally(() => {
       // Only the flight that still owns the slot may release it, so a late
       // finisher cannot clear a newer run's promise.
