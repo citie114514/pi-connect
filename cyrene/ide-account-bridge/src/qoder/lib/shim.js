@@ -233,15 +233,23 @@ export function createQoderShim(options) {
       (req.method === 'POST' && (url === '/v1/chat/completions' || url === '/v1/chat/completions/'))
     // Keep the model directory current, the way the Pi port does from
     // `auth.apiKey.resolve()`. `refreshCatalog` is TTL-gated (30 min), so this
-    // is a no-op for every request inside the window; a failure inside it is
-    // swallowed and the last good catalog is served, so a dead upstream never
-    // turns into a failed request.
+    // is a no-op for every request inside the window. The request only WAITS
+    // for the refresh while it has no usable directory to serve; once models
+    // exist, a stale-directory refresh runs in the background — the chat route
+    // must never block on a hung upstream that the cache can already answer
+    // for. A failure inside either path is swallowed and the last good catalog
+    // is served, so a dead upstream never turns into a failed request.
     if (catalogRoute && typeof refreshCatalog === 'function') {
-      try {
-        await refreshCatalog()
-      } catch (error) {
-        logger?.warn?.(`dsh-connect-qoder: ${region.displayName} 请求前目录刷新失败，使用缓存目录`, error)
-      }
+      const haveModels = resolveModels().length > 0
+      const refreshed = (async () => {
+        try {
+          return await refreshCatalog()
+        } catch (error) {
+          logger?.warn?.(`dsh-connect-qoder: ${region.displayName} 请求前目录刷新失败，使用缓存目录`, error)
+          return undefined
+        }
+      })()
+      if (!haveModels) await refreshed
     }
     if (req.method === 'GET' && (url === '/healthz' || url === '/healthz/')) {
       sendJson(res, 200, { ok: true })

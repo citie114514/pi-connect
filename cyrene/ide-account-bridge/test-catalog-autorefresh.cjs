@@ -15,6 +15,17 @@ const plugin = require('./dist/index.cjs')
 const STORAGE = path.join(os.tmpdir(), 'iab-autorefresh-test')
 const realNow = Date.now
 
+// 已有目录时刷新在后台进行，响应返回时可能尚未落盘；轮询等它结算。
+const waitForCatalogChange = async (baseline, timeoutMs = 10000) => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const at = readQoderCatalogAt()
+    if (at !== baseline) return at
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  return readQoderCatalogAt()
+}
+
 const readQoderCatalogAt = () => {
   const dir = path.join(STORAGE, 'qoder')
   if (!fs.existsSync(dir)) return 0
@@ -59,6 +70,7 @@ const readQoderCatalogAt = () => {
   // ---- 用例 1：TTL 内的请求不应触发刷新 ----
   const before = readQoderCatalogAt()
   await listModels()
+  await new Promise((r) => setTimeout(r, 1500))
   const afterInWindow = readQoderCatalogAt()
   const noRefreshInWindow = afterInWindow === before
   console.log(`\nTTL 内请求：fetchedAt ${noRefreshInWindow ? '未变（正确，未做无用请求）' : `被推进 ${before} -> ${afterInWindow}`}`)
@@ -87,7 +99,8 @@ const readQoderCatalogAt = () => {
   try {
     const res = await listModels()
     console.log(`过期请求：HTTP ${res.status}`)
-    refreshedAt = readQoderCatalogAt()
+    // 刷新在后台进行，等它落盘（仍在 mock 时间窗内）
+    refreshedAt = await waitForCatalogChange(afterHealth)
   } catch (error) {
     refreshError = error
   }

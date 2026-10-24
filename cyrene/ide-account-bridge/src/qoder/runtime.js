@@ -33,6 +33,14 @@ import { registerQoderCommands } from "./commands.js";
 export const PROVIDER_IDS = ["qoder-cn", "qoder"];
 
 /**
+ * After a failed catalog fetch, wait this long before another request-path
+ * attempt. Failures do not block the request (the cached catalog serves it),
+ * so without a backoff every request would re-fire the fetch against a
+ * struggling gateway. A forced refresh (the panel's button) skips the backoff.
+ */
+const CATALOG_RETRY_AFTER_FAILURE_MS = 60 * 1000;
+
+/**
  * One region's runtime: credential cache + catalog + shim + provider state.
  */
 class RegionRuntime {
@@ -60,6 +68,8 @@ class RegionRuntime {
      * while it runs. Cleared by the flight that still owns the slot.
      */
     this.catalogPending = undefined;
+    /** When the last catalog fetch failed; drives the retry backoff. */
+    this.catalogFailedAt = 0;
   }
 
   /** Start the loopback shim; called only when a session or a request needs it. */
@@ -148,15 +158,18 @@ class RegionRuntime {
    * passes nothing, and `fetchModels` then applies its own 30s ceiling).
    *
    * `force` skips the TTL check so the panel's explicit "refresh" button can
-   * pick up new models inside the 30-minute window. An in-flight fetch is still
-   * shared: it is already asking upstream, so a second one would only duplicate
-   * the call.
+   * pick up new models inside the 30-minute window, and the 60-second failure
+   * backoff. An in-flight fetch is still shared: it is already asking upstream,
+   * so a second one would only duplicate the call.
    */
   async refreshCatalog(signal, { force = false } = {}) {
     // Checked before freshness: a run already in the air has not landed yet, so
     // its caller must join it rather than be told "already fresh".
     if (this.catalogPending !== undefined) return this.catalogPending;
     if (!force && this.catalog.fresh()) return;
+    // The last good catalog serves the request, so a fetch that just failed
+    // must not be retried on every subsequent request.
+    if (!force && Date.now() - this.catalogFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return;
     const flight = this.fetchCatalog(signal).finally(() => {
       // Only the flight that still owns the slot may release it, so a late
       // finisher cannot clear a newer run's promise.
@@ -168,13 +181,22 @@ class RegionRuntime {
 
   /** One catalog fetch. Split out so `refreshCatalog` owns only the slot. */
   async fetchCatalog(signal) {
+    // Drop the cached desktop credential before reading: the cache reuses any
+    // credential whose `expired` flag is false, so a user who switched Qoder
+    // accounts in the desktop app would keep being billed on the old account
+    // until its token died. A catalog refresh is the natural re-read point —
+    // it runs at most every 30 minutes (plus the panel's forced refresh), so
+    // the extra DPAPI subprocess it costs is not on the request path.
+    this.credentials.invalidate();
     const credential = await this.resolveCredential();
     if (credential === undefined) return;
     try {
       const raw = await fetchModels(this.region, credential, signal);
       const entries = raw.map(normalizeEntry);
       if (entries.length > 0) this.catalog.replace(entries);
+      this.catalogFailedAt = 0;
     } catch (error) {
+      this.catalogFailedAt = Date.now();
       this.logger?.warn?.(
         `dsh-connect-qoder[pi]: ${this.region.displayName} catalog refresh failed; serving cached catalog`,
         error,

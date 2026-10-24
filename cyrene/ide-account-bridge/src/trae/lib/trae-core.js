@@ -1624,14 +1624,25 @@ function createTraeShim(options) {
 				(req.method === "POST" && (url === "/v1/chat/completions" || url === "/v1/chat/completions/"));
 			// Keep the model directory current, the way the Pi port does from
 			// `auth.apiKey.resolve()`. TTL-gated, so it is a no-op for every
-			// request inside the window; a failure inside it is swallowed and the
-			// last good directory is served.
+			// request inside the window. The request only WAITS for the discovery
+			// while the wire map is still unresolved — without it the bridge
+			// cannot translate a model id into a callable `config_name`, so there
+			// is no way to serve the request anyway. Once the map exists, a
+			// stale-directory rediscovery runs in the background: the chat route
+			// must never block up to 30s per directory function on an upstream
+			// the cache can already answer for. A failure inside either path is
+			// swallowed and the last good directory is served.
 			if (catalogRoute && typeof refreshCatalog === "function") {
-				try {
-					await refreshCatalog();
-				} catch (error) {
-					options?.logger?.warn?.("dsh-connect-trae: 请求前模型目录刷新失败，使用缓存目录", error);
-				}
+				const haveWire = options.wire?.resolved === true;
+				const refreshed = (async () => {
+					try {
+						return await refreshCatalog();
+					} catch (error) {
+						options?.logger?.warn?.("dsh-connect-trae: 请求前模型目录刷新失败，使用缓存目录", error);
+						return undefined;
+					}
+				})();
+				if (!haveWire) await refreshed;
 			}
 			if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) return writeJson(res, 200, { ok: true });
 			if (req.method === "GET" && (url === "/v1/models" || url === "/v1/models/")) return writeJson(res, 200, {

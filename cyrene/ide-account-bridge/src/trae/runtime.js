@@ -47,6 +47,14 @@ const REGION_KEYS = ["cn", "ai"];
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
 /**
+ * After a failed discovery, wait this long before another request-path attempt.
+ * Failures do not block the request any more (the cached directory serves it),
+ * so without a backoff every request would re-fire the full per-function
+ * discovery against a struggling upstream.
+ */
+const CATALOG_RETRY_AFTER_FAILURE_MS = 60 * 1000;
+
+/**
  * One region's stack: credential store, catalog, shim, upstream bridge.
  */
 class RegionStack {
@@ -68,6 +76,8 @@ class RegionStack {
     this.modelsReady = false;
     /** The in-flight discovery, shared by callers that arrive during it. */
     this.modelsPending = undefined;
+    /** When the last discovery attempt failed; drives the retry backoff. */
+    this.modelsFailedAt = 0;
     this.region = region;
     this.logger = logger;
     this.catalog = new TraeCatalog(region);
@@ -120,6 +130,9 @@ class RegionStack {
       catalog: this.catalog,
       client: this.delegating,
       logger: this.logger,
+      // Lets the shim tell "no directory worth serving from" (block on the
+      // discovery) from "cache available" (refresh in the background).
+      wire: this.wire,
       // Lets a request refresh the directory, mirroring what the Pi port does
       // from `auth.apiKey.resolve()`.
       refreshCatalog: () => this.refreshCatalog(),
@@ -172,11 +185,17 @@ class RegionStack {
             // let the next request retry rather than sit on it for 30 minutes.
             this.modelsDiscoveredAt = Date.now();
             this.modelsReady = true;
+            this.modelsFailedAt = 0;
           }
           return true;
         })
         .catch((error) => {
           this.logger?.warn?.(`trae: model directory discovery failed for ${this.region}`, error);
+          // Back off before the next attempt so a struggling upstream is not
+          // re-hit on every request. Safe unconditionally: only one discovery
+          // can be in the air, and the next cannot start until this one has
+          // settled and released the slot.
+          this.modelsFailedAt = Date.now();
           return false;
         })
         .finally(() => {
@@ -213,6 +232,10 @@ class RegionStack {
     // Fresh: nothing to do. Checked after the in-flight case so a run that has
     // already landed is never mistaken for one still owed.
     if (!force && this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
+    // A discovery just failed; the last good directory serves the request, so
+    // do not hammer the upstream on every request. A forced refresh (the
+    // panel's button) skips the backoff deliberately.
+    if (!force && Date.now() - this.modelsFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return null;
     // Stale, or never discovered. Drop the completed memo so `ensureReady`
     // rediscovers; nothing is in flight, so this cannot orphan a promise.
     this.modelsReady = false;
