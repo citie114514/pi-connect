@@ -208,6 +208,14 @@ class RegionRuntime {
 
   /** One catalog fetch. Split out so `refreshCatalog` owns only the slot. */
   async fetchCatalog(signal) {
+    // Drop the cached credential before reading: the cache reuses any
+    // credential whose `expired` flag is false, so a user who switched Qoder
+    // accounts in the desktop app would keep being billed on the old account
+    // until its token died. The refresh is the natural re-read point — it runs
+    // at most every 30 minutes (plus the explicit refresh) — and here the
+    // re-read is a synchronous file read, not the Cyrene build's DPAPI
+    // subprocess, so it costs nothing on the request path.
+    this.credentials.invalidate();
     const credential = await this.resolveCredential();
     if (credential === undefined) return;
     // Bounded regardless of what the caller passed: this runs *before* the

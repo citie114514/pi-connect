@@ -69,7 +69,11 @@ export class CredentialCache {
     if (isCredentialUsable(this.cached)) return this.cached
 
     this.reads += 1
-    const fromApp = this.loadApp()
+    // Await even though today's `loadApp` is synchronous: an injected reader
+    // that ever goes async (the Cyrene build's `loadCredential` spawns a helper
+    // process) would otherwise make `fromApp` an always-truthy promise and
+    // quietly bypass the env fallback.
+    const fromApp = await this.loadApp()
     const credential = fromApp ?? this.loadEnv()
     if (credential === undefined) {
       this.cached = undefined

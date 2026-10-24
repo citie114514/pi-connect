@@ -75,6 +75,9 @@ pi --provider trae --model DeepSeek-V4-Flash-Official --print "你好"
   既不会重复拉取，也不会让晚返回的旧结果覆盖新目录。
 - **部分发现视为失败。** Trae 的目录分散在多个 function 下，任一 function 失败时整体抛错，
   保留上一份完整目录并在下次请求重试；不再把缺模型的并集落盘并缓存 30 分钟。
+- **失败退避与后台刷新。** 发现失败后 60 秒内不再重试（显式刷新除外）；wire 映射已就绪时，
+  过期目录的重发现转后台进行，不再把最多 ~90 秒（3 个目录函数 × 30s 上限）的等待加在
+  每个请求上。首次发现（wire 尚未就绪）仍会等待，因为没有映射就无法发请求。
 - **模型目录会落盘缓存**（`~/.pi/agent/cache/dsh-connect-trae/catalog-<region>.json`）。
   `TraeCatalog` 本身只在内存里、且以 4 条静态 fallback 起步，而实时目录是异步发现的 ——
   任何在发现落地之前读模型清单的路径（新进程、`pi --list-models`、`/scoped-models`、

@@ -61,6 +61,8 @@ OSCrypt 密钥），**不写入应用文件、不启动 OAuth**。没有桌面�
   也不会再出现「先发起、后返回」的旧目录覆盖新目录。
 - Pi 的显式模型刷新（`refreshModels`）传 `force`，跳过 30 min TTL 与 60 s 失败退避 ——
   否则刚拉过的目录会让用户按下的刷新变成一个 no-op。
+- 目录刷新前重读桌面凭据（`credentials.invalidate()`）：在桌面应用里切换 Qoder 账号后，
+  最长 30 分钟（或显式刷新）即被采用，不再沿用旧账号直至 token 被上游拒绝。
 
 ## 排队（`Qoder is busy`）
 

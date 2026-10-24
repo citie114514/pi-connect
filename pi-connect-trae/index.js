@@ -50,6 +50,14 @@ const REGION_KEYS = ["cn", "ai"];
 /** How long a discovered Trae model directory stays fresh before rediscovery. */
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * After a failed discovery, wait this long before another request-path attempt.
+ * The last good directory serves requests in the meantime; without a backoff
+ * every request would re-fire the full per-function discovery against a
+ * struggling upstream. Matches the Qoder plugin's `CATALOG_RETRY_AFTER_FAILURE_MS`.
+ */
+const CATALOG_RETRY_AFTER_FAILURE_MS = 60 * 1000;
+
 /** Where the plugin-owned refreshed credential copies live inside the Pi agent dir. */
 function piOwnDir() {
   return join(homedir(), ".pi", "agent", "cache", "dsh-connect-trae");
@@ -153,6 +161,8 @@ class RegionStack {
     this.modelsReady = false;
     /** The in-flight discovery, shared by callers that arrive during it. */
     this.modelsPending = undefined;
+    /** When the last discovery attempt failed; drives the retry backoff. */
+    this.modelsFailedAt = 0;
     this.catalog = new TraeCatalog(region);
     this.identity = async () => {
       const store = this.store;
@@ -255,11 +265,17 @@ class RegionStack {
             // let the next request retry instead of sitting on it for 30 min.
             this.modelsDiscoveredAt = Date.now();
             this.modelsReady = true;
+            this.modelsFailedAt = 0;
           }
           return true;
         })
         .catch((error) => {
           this.logger?.warn?.(`trae: model directory discovery failed for ${this.region}`, error);
+          // Back off before the next attempt so a struggling upstream is not
+          // re-hit on every request. Only one discovery can be in the air, and
+          // the next cannot start until this one has settled and released the
+          // slot.
+          this.modelsFailedAt = Date.now();
           return false;
         })
         .finally(() => {
@@ -286,10 +302,26 @@ class RegionStack {
     // told "already fresh" or starting a second fetch.
     if (this.modelsPending !== undefined) return this.modelsPending;
     if (!force && this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
+    // A discovery just failed; the last good directory serves the request, so
+    // do not hammer the upstream on every request. A forced refresh (the
+    // explicit refreshModels path) skips the backoff deliberately.
+    if (!force && Date.now() - this.modelsFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return null;
     // Stale, or never discovered. Nothing is in flight, so clearing the memo
     // cannot orphan a promise.
     this.modelsReady = false;
     return this.ensureReady(signal);
+  }
+
+  /**
+   * Kick off a stale-directory rediscovery without waiting for it.
+   *
+   * Used by the request path once the wire map exists: the cache can already
+   * serve the request, so the discovery runs in the background instead of
+   * adding up to ~90s (3 directory functions × 30s ceiling) to every turn
+   * against a struggling upstream.
+   */
+  refreshCatalogInBackground() {
+    void this.refreshCatalog().catch(() => {});
   }
 
   /**
@@ -438,7 +470,12 @@ function createTraePiProvider(stack, logger) {
           // is loaded, then refresh the directory if it has gone stale. Pi
           // overrides the model's baseUrl with the returned one before sending.
           const shim = await stack.ensureReady();
-          await stack.refreshCatalog();
+          // Once the wire map exists the cache can serve the request, so a
+          // stale-directory rediscovery must not block the turn (up to ~90s:
+          // 3 directory functions × 30s ceiling, retried on every request
+          // without a backoff). First-ever discovery still blocks inside
+          // `ensureReady` — without the wire map there is nothing to serve.
+          if (stack.wire.resolved) stack.refreshCatalogInBackground();
           const apiKey = credential?.key ?? shim.token();
           if (apiKey === undefined || apiKey.length === 0) return undefined;
           return { auth: { apiKey, baseUrl: `${shim.baseUrl()}/v1` }, source: displayName };
