@@ -311,14 +311,20 @@ class RegionStack {
   applyDirectory(models, wire) {
     this.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
     this.wire.callableKeys.clear();
+    this.wire.byId.clear();
+    this.wire.byName.clear();
+    // The wire map is keyed by model id, but the bridge resolves a request's
+    // `model` by display name first, so the display name needs its own index.
+    // Deriving it from `models` — not from the wire map's keys — is what keeps
+    // models whose display name differs from their id resolvable.
     for (const model of models) {
       this.wire.callableKeys.add(model.id.trim().toLowerCase());
       this.wire.callableKeys.add(model.name.trim().toLowerCase());
+      const target = wire.get(model.id);
+      if (target === undefined) continue;
+      this.wire.byId.set(model.id, target);
+      this.wire.byName.set(model.name.trim().toLowerCase(), target);
     }
-    this.wire.byId.clear();
-    this.wire.byName.clear();
-    for (const [id, target] of wire) this.wire.byId.set(id, target);
-    for (const [name, target] of wire) this.wire.byName.set(name, target);
     this.wire.resolved = true;
   }
 

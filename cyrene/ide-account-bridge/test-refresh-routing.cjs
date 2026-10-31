@@ -428,6 +428,43 @@ const directoryResponse = (...names) => ({
   }
 
 
+  // -----------------------------------------------------------------
+  console.log('\n[8] wire 映射：显示名与 id 不同的模型也要能按名解析')
+
+  {
+    const { RegionStack } = await import('./src/trae/runtime.js')
+    const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
+    stack.ensureShim = async () => ({})
+    // 模拟真实目录：id 是 wire id，显示名完全不同
+    const models = [
+      { id: 'glm-5.3', name: 'GLM 5.3 Turbo' },
+      { id: 'kimi-k3', name: 'Kimi K3' },
+    ]
+    const wire = new Map([
+      ['glm-5.3', { configName: 'glm_5_3_solo', function: 'solo_work_remote' }],
+      ['kimi-k3', { configName: 'kimi_k3_solo', function: 'solo_work_lite' }],
+    ])
+    stack.applyDirectory(models, wire)
+
+    check('byId 按 id 可解析', () => {
+      const hit = stack.wireResolver('glm-5.3')
+      assert.ok(hit, 'byId 未命中')
+      assert.strictEqual(hit.configName, 'glm_5_3_solo')
+    })
+    check('byName 按显示名可解析（大小写不敏感）', () => {
+      const hit = stack.wireResolver('GLM 5.3 Turbo') ?? stack.wire.byName.get('glm 5.3 turbo')
+      assert.ok(hit, '显示名未命中')
+      assert.strictEqual(hit.configName, 'glm_5_3_solo')
+    })
+    check('byName 与 byId 条数一致', () => {
+      assert.strictEqual(stack.wire.byName.size, models.length, `实际 ${stack.wire.byName.size}`)
+    })
+    check('callableKeys 同时含 id 与显示名', () => {
+      assert.ok(stack.wire.callableKeys.has('glm-5.3'))
+      assert.ok(stack.wire.callableKeys.has('glm 5.3 turbo'))
+    })
+  }
+
   console.log(`\n${failures === 0 ? 'PASS  刷新路由与目录完整性符合预期' : `FAIL  ${failures} 项断言失败`}`)
   process.exit(failures === 0 ? 0 : 1)
 })().catch((error) => {
