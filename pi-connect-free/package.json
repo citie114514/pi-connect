@@ -1,0 +1,47 @@
+{
+  "name": "@citie114514/pi-connect-free",
+  "version": "0.1.0",
+  "displayName": "Pi Connect Free",
+  "description": "把本机已登录的 Qoder / TRAE 账号，加上公开免密的 Kilo 免费池，一起接入 Pi coding agent：无需注册、无需填 API Key。",
+  "type": "module",
+  "license": "MIT",
+  "author": "citie114514",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "free-model",
+    "qoder",
+    "trae",
+    "kilo",
+    "model-provider"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/citie114514/pi-connect.git",
+    "directory": "pi-connect-free"
+  },
+  "homepage": "https://github.com/citie114514/pi-connect/tree/main/pi-connect-free#readme",
+  "bugs": {
+    "url": "https://github.com/citie114514/pi-connect/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
