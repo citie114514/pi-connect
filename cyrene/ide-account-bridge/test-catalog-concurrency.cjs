@@ -20,6 +20,8 @@ const settle = async () => {
 ;(async () => {
   const { RegionStack } = await import('./src/trae/runtime.js')
 
+  const okOutcome = (models) => ({ models, wire: new Map(), complete: true, failures: [] })
+
   const makeStack = () => {
     const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
     const calls = []
@@ -29,7 +31,7 @@ const settle = async () => {
       return new Promise((resolve) => {
         landings.push({
           index: calls.length,
-          resolve: (models) => resolve(models),
+          resolve: (models) => resolve(okOutcome(models)),
         })
       })
     }
@@ -135,14 +137,25 @@ const settle = async () => {
       assert.strictEqual(stack.modelsPending, undefined)
     })
 
-    // 下一趟应能重新发起
+    // 失败后退避期内不重试（避免每个请求都撞故障上游）
+    const inBackoff = stack.refreshCatalog()
+    await settle()
+    check('失败后立即重试被退避挡住', () => {
+      assert.strictEqual(calls.length, 1, `实际 ${calls.length} 次`)
+    })
+    await inBackoff
+
+    // 退避期过后应能重新发起
+    const realNow = Date.now
+    Date.now = () => realNow() + 61 * 1000
     const b = stack.refreshCatalog()
     await settle()
-    check('失败后下次请求会重新发现', () => {
+    check('退避期过后重新发现', () => {
       assert.strictEqual(calls.length, 2, `实际 ${calls.length} 次`)
     })
     landings[1].resolve([{ id: 'ok', name: 'ok' }])
     await b
+    Date.now = realNow
     check('恢复后 modelsReady 为 true', () => assert.strictEqual(stack.modelsReady, true))
   }
 

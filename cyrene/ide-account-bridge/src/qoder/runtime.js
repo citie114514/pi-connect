@@ -184,17 +184,28 @@ class RegionRuntime {
     // Drop the cached desktop credential before reading: the cache reuses any
     // credential whose `expired` flag is false, so a user who switched Qoder
     // accounts in the desktop app would keep being billed on the old account
-    // until its token died. A catalog refresh is the natural re-read point —
-    // it runs at most every 30 minutes (plus the panel's forced refresh), so
-    // the extra DPAPI subprocess it costs is not on the request path.
+    // until its token died. A catalog refresh is the natural re-read point, and
+    // the TTL plus the failure backoff below are what keep the cost bounded —
+    // it is never per-request.
     this.credentials.invalidate();
     const credential = await this.resolveCredential();
     if (credential === undefined) return;
     try {
       const raw = await fetchModels(this.region, credential, signal);
       const entries = raw.map(normalizeEntry);
-      if (entries.length > 0) this.catalog.replace(entries);
-      this.catalogFailedAt = 0;
+      if (entries.length > 0) {
+        this.catalog.replace(entries);
+        this.catalogFailedAt = 0;
+        return;
+      }
+      // A successful HTTP call that lists nothing is not a usable directory —
+      // an account with no entitlement, or every entry disabled upstream. Treat
+      // it as a failure so the retry backoff applies; otherwise the shim would
+      // block every request on a fresh upstream call that keeps answering 200.
+      this.catalogFailedAt = Date.now();
+      this.logger?.warn?.(
+        `dsh-connect-qoder[pi]: ${this.region.displayName} catalog came back empty; serving cached catalog`,
+      );
     } catch (error) {
       this.catalogFailedAt = Date.now();
       this.logger?.warn?.(

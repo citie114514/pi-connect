@@ -252,29 +252,43 @@ class RegionStack {
    * upstream answers `4001 param is invalid`. Discovery is cached after the
    * first success, and a failure resets the cache so the next request retries.
    */
-  async ensureReady(signal) {
+  async ensureReady({ rediscover = false, signal } = {}) {
     const shim = await this.ensureShim();
     // One discovery at a time: a caller arriving mid-flight joins the run
     // already in progress, so only one result ever lands.
-    if (this.modelsReady === false && this.modelsPending === undefined) {
+    if ((this.modelsReady === false || rediscover) && this.modelsPending === undefined) {
       const flight = this.discoverModels(signal)
-        .then((models) => {
-          if (models.length > 0) {
-            this.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
-            // Only a success moves the clock: an empty or failed discovery must
-            // let the next request retry instead of sitting on it for 30 min.
+        .then((outcome) => {
+          // Nothing usable came back. Record it so the backoff applies, but do
+          // not discard what is already being served: `discoverModels` leaves
+          // the previous catalog and wire map untouched on this path.
+          if (outcome.models.length === 0) {
+            this.modelsFailedAt = Date.now();
+            this.logger?.warn?.(
+              `trae: model directory unavailable for ${this.region}; keeping the previous directory`,
+              outcome.failures,
+            );
+            return false;
+          }
+          // Only a full, non-empty answer advances the clock. A partial one is
+          // still applied (those models are callable), but the next request
+          // retries so the models from the failed function can be picked up.
+          this.applyDirectory(outcome.models, outcome.wire);
+          if (outcome.complete) {
             this.modelsDiscoveredAt = Date.now();
-            this.modelsReady = true;
             this.modelsFailedAt = 0;
+            this.modelsReady = true;
+          } else {
+            this.modelsFailedAt = Date.now();
+            this.logger?.warn?.(
+              `trae: model directory for ${this.region} is incomplete; serving it but retrying on the next request`,
+              outcome.failures,
+            );
           }
           return true;
         })
         .catch((error) => {
           this.logger?.warn?.(`trae: model directory discovery failed for ${this.region}`, error);
-          // Back off before the next attempt so a struggling upstream is not
-          // re-hit on every request. Only one discovery can be in the air, and
-          // the next cannot start until this one has settled and released the
-          // slot.
           this.modelsFailedAt = Date.now();
           return false;
         })
@@ -286,6 +300,26 @@ class RegionStack {
     }
     if (this.modelsPending !== undefined) await this.modelsPending;
     return shim;
+  }
+
+  /**
+   * Land a discovered directory: replace the catalog and the wire map together.
+   *
+   * Only ever called with a non-empty result, so a failed or empty discovery
+   * can never clear the maps a live request depends on.
+   */
+  applyDirectory(models, wire) {
+    this.commitCatalog(deriveCatalog(sanitizeCatalog(models), new Set(), {}));
+    this.wire.callableKeys.clear();
+    for (const model of models) {
+      this.wire.callableKeys.add(model.id.trim().toLowerCase());
+      this.wire.callableKeys.add(model.name.trim().toLowerCase());
+    }
+    this.wire.byId.clear();
+    this.wire.byName.clear();
+    for (const [id, target] of wire) this.wire.byId.set(id, target);
+    for (const [name, target] of wire) this.wire.byName.set(name, target);
+    this.wire.resolved = true;
   }
 
   /**
@@ -306,10 +340,10 @@ class RegionStack {
     // do not hammer the upstream on every request. A forced refresh (the
     // explicit refreshModels path) skips the backoff deliberately.
     if (!force && Date.now() - this.modelsFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return null;
-    // Stale, or never discovered. Nothing is in flight, so clearing the memo
-    // cannot orphan a promise.
-    this.modelsReady = false;
-    return this.ensureReady(signal);
+    // Ask `ensureReady` to rediscover without touching `modelsReady`: that flag
+    // means "a directory has landed", and a failed refresh must not revoke it —
+    // the previous directory is still serving requests.
+    return this.ensureReady({ rediscover: true, signal });
   }
 
   /**
@@ -358,27 +392,56 @@ class RegionStack {
    * skeleton + wire config names), then rebuild the callable-key maps.
    */
   async discoverModels(signal) {
-    const [remote, solo] = await Promise.all([
-      this.remoteCatalog.fetchModels(signal).catch(() => []),
-      this.upstream.fetchModels(signal).catch(() => []),
+    const [remoteResult, soloResult] = await Promise.all([
+      this.remoteCatalog.fetchModels(signal).then(
+        (models) => ({ models, failures: [] }),
+        (error) => ({ models: [], failures: [`remote: ${String(error).slice(0, 120)}`] }),
+      ),
+      // The SOLO source exposes per-function failures alongside a partial
+      // roster; `fetchModels` is the plain-array form for callers that do not
+      // care. Fall back when an older extraction lacks the detailed variant.
+      typeof this.upstream.fetchModelsDetailed === "function"
+        ? this.upstream.fetchModelsDetailed(signal).then(
+            (result) => ({ models: result.models, failures: result.failures ?? [] }),
+            (error) => ({ models: [], failures: [`solo: ${String(error).slice(0, 120)}`] }),
+          )
+        : this.upstream.fetchModels(signal).then(
+            (models) => ({ models, failures: [] }),
+            (error) => ({ models: [], failures: [`solo: ${String(error).slice(0, 120)}`] }),
+          ),
     ]);
-    const merged = mergeTraeModelSources(remote, solo);
-    this.wire.callableKeys.clear();
-    for (const model of merged) {
-      this.wire.callableKeys.add(model.id.trim().toLowerCase());
-      this.wire.callableKeys.add(model.name.trim().toLowerCase());
-    }
-    this.wire.resolved = merged.length > 0;
-    this.wire.byId.clear();
-    this.wire.byName.clear();
-    for (const model of merged) {
-      if (model.wireConfigName !== undefined) {
-        const target = { configName: model.wireConfigName, ...(model.wireFunction === undefined ? {} : { function: model.wireFunction }) };
-        this.wire.byId.set(model.id, target);
-        this.wire.byName.set(model.name.trim().toLowerCase(), target);
+    const failures = [...remoteResult.failures, ...soloResult.failures];
+    // The remote directory is the merge skeleton, so losing it usually means an
+    // empty merge even when SOLO answered fine. Falling back to the wire roster
+    // keeps the region usable: those entries are exactly the models the bridge
+    // can call, they just lack the remote skeleton's display extras.
+    const merged = mergeTraeModelSources(remoteResult.models, soloResult.models);
+    if (merged.length === 0 && soloResult.models.length > 0) {
+      failures.push("remote: unavailable; serving the SOLO roster without the remote skeleton");
+      for (const model of soloResult.models) {
+        merged.push({
+          id: model.id,
+          name: model.name,
+          input: ["text"],
+          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+          ...(model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier }),
+          ...(model.reasoning === undefined ? {} : { reasoning: model.reasoning }),
+          ...(model.id === "" ? {} : { wireConfigName: model.id }),
+          ...(model.function === undefined ? {} : { wireFunction: model.function }),
+        });
       }
     }
-    return merged;
+    const wire = new Map();
+    for (const model of merged) {
+      if (model.wireConfigName !== undefined) {
+        wire.set(model.id, {
+          configName: model.wireConfigName,
+          ...(model.wireFunction === undefined ? {} : { function: model.wireFunction }),
+        });
+      }
+    }
+    return { models: merged, wire, complete: failures.length === 0, failures };
   }
 }
 
@@ -470,12 +533,15 @@ function createTraePiProvider(stack, logger) {
           // is loaded, then refresh the directory if it has gone stale. Pi
           // overrides the model's baseUrl with the returned one before sending.
           const shim = await stack.ensureReady();
-          // Once the wire map exists the cache can serve the request, so a
+          // Once a directory exists the cache can serve the request, so a
           // stale-directory rediscovery must not block the turn (up to ~90s:
           // 3 directory functions × 30s ceiling, retried on every request
-          // without a backoff). First-ever discovery still blocks inside
-          // `ensureReady` — without the wire map there is nothing to serve.
-          if (stack.wire.resolved) stack.refreshCatalogInBackground();
+          // without a backoff). The test is "do we have models", not "is the
+          // wire map populated" — a wire map may legitimately be empty when
+          // every id is already its own wire id, and the catalog is seeded
+          // with the static fallback. First-ever discovery still blocks inside
+          // `ensureReady`; everything after runs in the background.
+          if (stack.catalog.current().length > 0) stack.refreshCatalogInBackground();
           const apiKey = credential?.key ?? shim.token();
           if (apiKey === undefined || apiKey.length === 0) return undefined;
           return { auth: { apiKey, baseUrl: `${shim.baseUrl()}/v1` }, source: displayName };

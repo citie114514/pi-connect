@@ -227,8 +227,19 @@ class RegionRuntime {
     try {
       const raw = await fetchModels(this.region, credential, deadline);
       const entries = raw.map(normalizeEntry);
-      if (entries.length > 0) this.catalog.replace(entries);
-      this.catalogFailedAt = 0;
+      if (entries.length > 0) {
+        this.catalog.replace(entries);
+        this.catalogFailedAt = 0;
+        return;
+      }
+      // A successful HTTP call that lists nothing is not a usable directory —
+      // an account with no entitlement, or every entry disabled upstream. Treat
+      // it as a failure so the retry backoff applies; otherwise the request
+      // path would block on a fresh upstream call that keeps answering 200.
+      this.catalogFailedAt = Date.now();
+      this.logger?.warn?.(
+        `dsh-connect-qoder[pi]: ${this.region.displayName} catalog came back empty; serving cached catalog`,
+      );
     } catch (error) {
       this.catalogFailedAt = Date.now();
       this.logger?.warn?.(

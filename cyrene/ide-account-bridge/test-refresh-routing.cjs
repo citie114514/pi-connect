@@ -31,6 +31,9 @@ const CREDENTIAL = {
   host: 'https://api.trae.cn',
 }
 
+const okOutcome = (models, wire = new Map()) => ({ models, wire, complete: true, failures: [] })
+const failedOutcome = (reason) => ({ models: [], wire: new Map(), complete: false, failures: [String(reason)] })
+
 const directoryResponse = (...names) => ({
   ok: true,
   status: 200,
@@ -174,7 +177,7 @@ const directoryResponse = (...names) => ({
   }
 
   // -----------------------------------------------------------------
-  console.log('\n[2] Trae 目录发现：单函数瞬时失败不应落半份目录')
+  console.log('\n[2] Trae 目录发现：单函数失败仍返回可用的部分目录')
 
   {
     const calls = []
@@ -190,15 +193,14 @@ const directoryResponse = (...names) => ({
       },
     })
 
-    let thrown
-    try {
-      await client.fetchModels()
-    } catch (error) {
-      thrown = error
-    }
+    const result = await client.fetchModelsDetailed()
     check('两个函数都被请求', () => assert.strictEqual(calls.length, 2, `实际 ${calls.length} 次`))
-    check('部分成功仍整体抛错', () => assert.ok(thrown, '未抛错，返回了不完整的并集'))
-    check('错误信息包含失败函数', () => assert.match(String(thrown?.message), /incomplete|solo_work_lite/))
+    check('部分成功仍返回可用模型', () => assert.deepStrictEqual(result.models.map((m) => m.id), ['glm-5.3']))
+    check('失败函数被上报', () => assert.match(result.failures.join(';'), /solo_work_lite|503/))
+
+    const plain = await client.fetchModels()
+    check('fetchModels 仍返回纯数组', () => assert.ok(Array.isArray(plain)))
+    check('fetchModels 与 detailed 一致', () => assert.deepStrictEqual(plain.map((m) => m.id), ['glm-5.3']))
   }
 
   {
@@ -226,7 +228,7 @@ const directoryResponse = (...names) => ({
     stack.ensureShim = async () => ({})
     stack.discoverModels = async () => {
       discoveries += 1
-      return [{ id: 'm1', name: 'm1' }]
+      return okOutcome([{ id: 'm1', name: 'm1' }])
     }
 
     await stack.refreshCatalog()
@@ -247,9 +249,9 @@ const directoryResponse = (...names) => ({
     stack.ensureShim = async () => ({})
     stack.discoverModels = async () => {
       attempts += 1
-      throw new Error('upstream down')
+      return failedOutcome('upstream down')
     }
-    // 冷启动：目录为空，必须等待发现（并失败）
+    // 冷启动：目录为空，发现失败
     await stack.refreshCatalog()
     check('首次发现尝试', () => assert.strictEqual(attempts, 1))
     await stack.refreshCatalog()
@@ -265,8 +267,8 @@ const directoryResponse = (...names) => ({
     stack.ensureShim = async () => ({})
     stack.discoverModels = async () => {
       attempts += 1
-      if (attempts === 1) throw new Error('upstream down')
-      return [{ id: 'm1', name: 'm1' }]
+      if (attempts === 1) return failedOutcome('upstream down')
+      return okOutcome([{ id: 'm1', name: 'm1' }])
     }
     const realNow = Date.now
     await stack.refreshCatalog()
@@ -331,6 +333,100 @@ const directoryResponse = (...names) => ({
     await runtime.refreshCatalog(undefined, { force: true })
     check('force 跳过 TTL 拉取', () => assert.strictEqual(fetches, 1, `实际 ${fetches} 次`))
   }
+
+  // -----------------------------------------------------------------
+  console.log('\n[5] Trae：目录过期 + 上游持续失败时，wire 保留且请求不阻塞')
+
+  {
+    const { RegionStack } = await import('./src/trae/runtime.js')
+    const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
+    let upstreamCalls = 0
+    stack.ensureShim = async () => ({})
+    stack.discoverModels = async () => okOutcome(
+      [{ id: 'model-a', name: 'Model-A' }],
+      new Map([['model-a', { configName: 'model-a', function: 'solo_work_remote' }]]),
+    )
+    await stack.refreshCatalog()
+    check('wire 已就绪', () => assert.strictEqual(stack.wire.resolved, true))
+    check('wire 有一条映射', () => assert.strictEqual(stack.wire.byId.size, 1))
+
+    stack.discoverModels = async () => {
+      upstreamCalls += 1
+      return failedOutcome('solo_work_remote: HTTP 500')
+    }
+    const realNow = Date.now
+    stack.modelsDiscoveredAt = realNow() - 31 * 60 * 1000
+    await stack.refreshCatalog()
+    check('失败后 wire 映射未被清空', () => assert.strictEqual(stack.wire.byId.size, 1, `实际 ${stack.wire.byId.size}`))
+    check('失败后 wire.resolved 仍为 true', () => assert.strictEqual(stack.wire.resolved, true))
+    check('失败后 catalog 仍可服务', () => assert.ok(stack.catalog.current().length > 0))
+    check('失败已记录（退避生效）', () => assert.notStrictEqual(stack.modelsFailedAt, 0))
+    check('modelsReady 保持 true', () => assert.strictEqual(stack.modelsReady, true))
+
+    const before = upstreamCalls
+    for (let i = 0; i < 4; i += 1) await stack.refreshCatalog()
+    check('退避期内连续 4 次请求不再打上游', () => assert.strictEqual(upstreamCalls, before, `实际多打 ${upstreamCalls - before} 次`))
+  }
+
+  // -----------------------------------------------------------------
+  console.log('\n[6] Trae：部分成功不推进 TTL，下次请求会重试补齐')
+
+  {
+    const { RegionStack } = await import('./src/trae/runtime.js')
+    const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
+    let calls = 0
+    stack.ensureShim = async () => ({})
+    stack.discoverModels = async () => {
+      calls += 1
+      if (calls === 1) {
+        return {
+          models: [{ id: 'model-a', name: 'Model-A' }],
+          wire: new Map([['model-a', { configName: 'model-a' }]]),
+          complete: false,
+          failures: ['solo_work_lite: HTTP 500'],
+        }
+      }
+      return okOutcome(
+        [{ id: 'model-a', name: 'Model-A' }, { id: 'glm-5.3', name: 'GLM-5.3' }],
+        new Map([['model-a', { configName: 'model-a' }], ['glm-5.3', { configName: 'glm-5.3' }]]),
+      )
+    }
+    await stack.refreshCatalog()
+    check('部分目录已可用', () => assert.strictEqual(stack.catalog.current().length, 1))
+    check('部分成功未标记就绪', () => assert.strictEqual(stack.modelsReady, false))
+    check('部分成功记录了失败时间', () => assert.notStrictEqual(stack.modelsFailedAt, 0))
+
+    const realNow = Date.now
+    Date.now = () => realNow() + 61 * 1000
+    await stack.refreshCatalog()
+    check('重试补齐了缺失模型', () => assert.strictEqual(stack.catalog.current().length, 2))
+    check('补齐后 modelsReady 为 true', () => assert.strictEqual(stack.modelsReady, true))
+    check('补齐后清除失败时间', () => assert.strictEqual(stack.modelsFailedAt, 0))
+    Date.now = realNow
+  }
+
+  // -----------------------------------------------------------------
+  console.log('\n[7] Qoder：上游成功但目录为空时也要退避（P3）')
+
+  {
+    const { RegionRuntime, REGIONS } = await import('./src/qoder/runtime.js')
+    const runtime = new RegionRuntime(REGIONS[0], { warn() {} }, os.tmpdir(), undefined, 0)
+    let fetches = 0
+    runtime.catalog = { fresh: () => false, replace() { throw new Error('空目录不应写入') } }
+    runtime.credentials = { invalidate() {} }
+    runtime.resolveCredential = async () => ({ userID: 'u' })
+    runtime.fetchCatalog = async () => {
+      fetches += 1
+      runtime.catalogFailedAt = Date.now()
+    }
+    await runtime.refreshCatalog()
+    check('首次拉取尝试', () => assert.strictEqual(fetches, 1))
+    await runtime.refreshCatalog()
+    check('空目录退避期内不重试', () => assert.strictEqual(fetches, 1, `实际 ${fetches} 次`))
+    await runtime.refreshCatalog(undefined, { force: true })
+    check('force 跳过空目录退避', () => assert.strictEqual(fetches, 2, `实际 ${fetches} 次`))
+  }
+
 
   console.log(`\n${failures === 0 ? 'PASS  刷新路由与目录完整性符合预期' : `FAIL  ${failures} 项断言失败`}`)
   process.exit(failures === 0 ? 0 : 1)

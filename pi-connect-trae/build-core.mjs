@@ -4,7 +4,7 @@
 // 3. Patch auth paths to a Pi-owned dir
 // 4. Patch refreshNow's atomic write to plain fs
 // 4e. Drop the per-request debug dump
-// 4f. Treat a partially discovered SOLO directory as a failure
+// 4f. Report a partially discovered SOLO directory instead of throwing
 // 5. Keep only protocol core (1-3111); strip usage/web-status/DSH entry
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -234,25 +234,42 @@ debugLines.splice(debugStart, debugEnd - debugStart + 1);
 text = debugLines.join("\n");
 if (text.includes("chat request received")) throw new Error("chat-request debug log still present");
 
-// --- 4f. Treat a partially discovered directory as a failure ---
-// The SOLO roster is split across directory functions, so a per-function
-// failure must abort the whole discovery: returning the union of the functions
-// that answered silently drops models (and their wire mappings) and caches the
-// incomplete result for 30 minutes. Same rule as the Cyrene copy.
+// --- 4f. Report a partially discovered directory instead of throwing ---
+// The SOLO roster is split across directory functions. A per-function failure
+// must not take the whole region down — an account with no access to one mode
+// fails deterministically, and dropping the models the other function listed
+// leaves the region with nothing. So keep the partial union, hand it back as
+// `{ models, failures }` from `fetchModelsDetailed`, and let the caller retry
+// rather than cache the gap. `fetchModels` stays a plain array for callers that
+// do not care. Same rule as the Cyrene copy.
 const SOLO_MODELS_ANCHOR = "const models = [...byId.values()];";
 const soloLines = text.split("\n");
 const soloIdx = soloLines.findIndex((l) => l.includes(SOLO_MODELS_ANCHOR));
 if (soloIdx < 0) throw new Error("SOLO models union anchor not found");
-const SOLO_EMPTY_CHECK =
-  '\t\tif (models.length === 0) throw new Error(`Trae SOLO models response contained no models (${failures.join("; ") || "empty directory"})`);';
-if (soloLines[soloIdx + 1] !== SOLO_EMPTY_CHECK) throw new Error("SOLO models empty check changed");
-soloLines.splice(
-  soloIdx + 1,
-  1,
-  '\t\tif (failures.length > 0) throw new Error(`Trae SOLO models directory incomplete (${failures.join("; ")})`);',
-  '\t\tif (models.length === 0) throw new Error("Trae SOLO models response contained no models (empty directory)");',
-);
+const SOLO_RETURN = "\t\treturn { models, failures };";
+soloLines[soloIdx + 1] = SOLO_RETURN;
 text = soloLines.join("\n");
+
+const FETCH_ANCHOR =
+  "\tasync fetchModels(signal) {\n\t\tconst [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()]);";
+const FETCH_REPLACEMENT = [
+  "\tasync fetchModels(signal) {",
+  "\t\treturn (await this.fetchModelsDetailed(signal)).models;",
+  "\t}",
+  "\t/**",
+  "\t* Read the callable roster, keeping the per-function failures.",
+  "\t*",
+  "\t* Returns `{ models, failures }`. A partial union is still returned: the",
+  "\t* models the answering functions listed are callable, and refusing them",
+  "\t* would take the whole region down for an account that has no access to",
+  "\t* one of the modes, which is a deterministic condition rather than a",
+  "\t* transient one.",
+  "\t*/",
+  "\tasync fetchModelsDetailed(signal) {",
+  "\t\tconst [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()]);",
+].join("\n");
+if (text.split(FETCH_ANCHOR).length !== 2) throw new Error("SOLO fetchModels anchor not unique");
+text = text.replace(FETCH_ANCHOR, FETCH_REPLACEMENT);
 
 // --- 5. Strip the DSH-only regions, keep the protocol core + usage/check-in logic ---
 // Kept: everything through `src/web-status.ts` (usage client, check-in status,

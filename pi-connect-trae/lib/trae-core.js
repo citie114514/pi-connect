@@ -1914,6 +1914,18 @@ var TraeSoloUpstreamClient = class {
 	* paygo variants) never surface even though they appear here.
 	*/
 	async fetchModels(signal) {
+		return (await this.fetchModelsDetailed(signal)).models;
+	}
+	/**
+	* Read the callable roster, keeping the per-function failures.
+	*
+	* Returns `{ models, failures }`. A partial union is still returned: the
+	* models the answering functions listed are callable, and refusing them
+	* would take the whole region down for an account that has no access to one
+	* of the modes — a deterministic condition, not a transient one. `failures`
+	* lets the caller retry instead of caching the gap for a full directory TTL.
+	*/
+	async fetchModelsDetailed(signal) {
 		const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()]);
 		const region = regionOfCredential(credential);
 		const base = this.options.baseUrl ?? REGION_GATEWAYS[region].chat;
@@ -1950,13 +1962,8 @@ var TraeSoloUpstreamClient = class {
 			this.collectModels(list, directoryFunction, byId);
 		}
 		const models = [...byId.values()];
-		// A partial union is not a directory: the failed function's models
-		// would silently disappear from the roster, and a surviving model could
-		// lose its `config_name`/function mapping. Throwing keeps the last good
-		// directory and lets the next request retry.
-		if (failures.length > 0) throw new Error(`Trae SOLO models directory incomplete (${failures.join("; ")})`);
-		if (models.length === 0) throw new Error("Trae SOLO models response contained no models (empty directory)");
-		return models;
+		if (models.length === 0) throw new Error(`Trae SOLO models response contained no models (${failures.join("; ") || "empty directory"})`);
+		return { models, failures };
 	}
 	/** Merge one function's config list into the shared catalogue (first wins). */
 	collectModels(list, directoryFunction, byId) {

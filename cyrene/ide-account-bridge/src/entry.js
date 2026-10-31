@@ -263,7 +263,10 @@ const plugin = {
             await stack.ensureShim()
             // `force` is what makes the panel button do what it says: without
             // it a directory less than 30 minutes old is served unchanged.
-            await stack.refreshCatalog({ force })
+            // The deadline matters here too: the SOLO directory asks one
+            // function per mode, each with its own 30s ceiling, so an
+            // unbounded warm-up could hold the panel shut for minutes.
+            await stack.refreshCatalog({ force, signal: deadline() })
           } catch (error) {
             logger.warn(`trae ${stack.region}: 预热失败`, error instanceof Error ? error.message : String(error))
           }

@@ -1625,15 +1625,15 @@ function createTraeShim(options) {
 			// Keep the model directory current, the way the Pi port does from
 			// `auth.apiKey.resolve()`. TTL-gated, so it is a no-op for every
 			// request inside the window. The request only WAITS for the discovery
-			// while the wire map is still unresolved — without it the bridge
-			// cannot translate a model id into a callable `config_name`, so there
-			// is no way to serve the request anyway. Once the map exists, a
-			// stale-directory rediscovery runs in the background: the chat route
-			// must never block up to 30s per directory function on an upstream
-			// the cache can already answer for. A failure inside either path is
-			// swallowed and the last good directory is served.
+			// while there is no directory to serve from — the catalog is seeded
+			// with the static fallback, so "has models" is the right question
+			// (and the same one the Qoder shim asks). Once a directory exists, a
+			// stale rediscovery runs in the background: the chat route must never
+			// block up to 30s per directory function on an upstream the cache can
+			// already answer for. A failure inside either path is swallowed and
+			// the last good directory is served.
 			if (catalogRoute && typeof refreshCatalog === "function") {
-				const haveWire = options.wire?.resolved === true;
+				const haveModels = options.catalog.current().length > 0;
 				const refreshed = (async () => {
 					try {
 						return await refreshCatalog();
@@ -1642,7 +1642,7 @@ function createTraeShim(options) {
 						return undefined;
 					}
 				})();
-				if (!haveWire) await refreshed;
+				if (!haveModels) await refreshed;
 			}
 			if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) return writeJson(res, 200, { ok: true });
 			if (req.method === "GET" && (url === "/v1/models" || url === "/v1/models/")) return writeJson(res, 200, {
@@ -2074,6 +2074,20 @@ var TraeSoloUpstreamClient = class {
 	* paygo variants) never surface even though they appear here.
 	*/
 	async fetchModels(signal) {
+		return (await this.fetchModelsDetailed(signal)).models;
+	}
+	/**
+	* Read the callable roster, keeping the per-function failures.
+	*
+	* Returns `{ models, failures }`. A partial union is still returned: the
+	* models the answering functions listed are callable, and refusing them
+	* would take the whole region down for an account that has no access to one
+	* of the modes — a deterministic condition, not a transient one. `failures`
+	* lets the caller retry instead of caching the gap for a full directory TTL.
+	*
+	* @returns `{ models, failures }`; throws only when nothing was discovered.
+	*/
+	async fetchModelsDetailed(signal) {
 		const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()]);
 		const region = regionOfCredential(credential);
 		const base = this.options.baseUrl ?? REGION_GATEWAYS[region].chat;
@@ -2110,13 +2124,8 @@ var TraeSoloUpstreamClient = class {
 			this.collectModels(list, directoryFunction, byId);
 		}
 		const models = [...byId.values()];
-		// A partial union is not a directory: the failed function's models
-		// would silently disappear from `/v1/models`, and a model that did
-		// survive might lose its `config_name`/function mapping. Throwing
-		// leaves the last good directory in place; the next request retries.
-		if (failures.length > 0) throw new Error(`Trae SOLO models directory incomplete (${failures.join("; ")})`);
-		if (models.length === 0) throw new Error("Trae SOLO models response contained no models (empty directory)");
-		return models;
+		if (models.length === 0) throw new Error(`Trae SOLO models response contained no models (${failures.join("; ") || "empty directory"})`);
+		return { models, failures };
 	}
 	/** Merge one function's config list into the shared catalogue (first wins). */
 	collectModels(list, directoryFunction, byId) {
