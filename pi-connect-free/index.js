@@ -39,6 +39,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 
 import { loadProviders, providerById, EXCLUDED_CHANNELS } from './src/registry.js'
 import { FreeModelError, KIND } from './src/providers/types.js'
+import { registerFreeCommands } from './commands.js'
 
 /** Prefix every registered provider id carries, so the picker groups them. */
 const ID_PREFIX = 'free-'
@@ -421,6 +422,10 @@ export default async function activate(pi) {
     return
   }
   registerAuth(providers)
+  registerFreeCommands(pi, LOGIN, LOGOUT, (id) => {
+    const channel = providers.find((candidate) => candidate.id === id)
+    return channel?.name ?? id
+  })
 
   const shims = new Map()
   for (const channel of providers) {
@@ -483,16 +488,16 @@ export default async function activate(pi) {
  */
 export const LOGIN = new Map()
 
+/** The matching sign-out functions. */
+export const LOGOUT = new Map()
+
 /** Forget one channel's stored sign-in, if it owns one. */
 export async function logout(channelId) {
-  const signIn = LOGOUT.get(channelId)
-  if (signIn === undefined) return false
-  await signIn()
+  const signOut = LOGOUT.get(channelId)
+  if (signOut === undefined) return false
+  await signOut()
   return true
 }
-
-/** @type {Map<string, () => void>} */
-const LOGOUT = new Map()
 
 /**
  * Register the sign-in/logout entry points for every channel that has them.
