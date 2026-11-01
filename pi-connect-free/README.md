@@ -11,20 +11,36 @@ Pi provider
 
 ## 支持哪些渠道
 
-| 渠道 | 凭据从哪来 | 登录方式 |
-| --- | --- | --- |
-| Kilo Free Pool | 无需凭据 | 上游公开发布的免密池 |
-| Cline | 本包内登录 | WorkOS 设备码（浏览器输入短码） |
-| MiniMax Code | 本包内登录 | 设备码 + PKCE（浏览器输入短码） |
-| LobsterAI（有道） | 本包内登录 | 浏览器授权，回环回调 |
-| CodeArts（华为云） | 本包内登录 | 浏览器授权，回环回调 |
-| Raccoon Work（商汤） | 本包内登录 | 扫码 |
-| Qoder CN / Qoder | 本机桌面端登录态 | 复用已有登录，无需再次授权 |
-| TRAE CN / TRAE Global | 本机桌面端 / CLI 登录态 | 复用已有登录，无需再次授权 |
+| 渠道 | provider id | 凭据从哪来 | 登录方式 |
+| --- | --- | --- | --- |
+| Kilo Free Pool | `free-kilo` | 无需凭据 | 上游公开发布的免密池 |
+| Cline | `free-cline` | 本包内登录 | WorkOS 设备码 |
+| MiniMax Code | `free-minimax` | 本包内登录 | 设备码 + PKCE |
+| LobsterAI（有道） | `free-lobsterai` | 本包内登录 | 浏览器授权，回环回调 |
+| CodeArts（华为云） | `free-codearts` | 本包内登录 | 浏览器授权，回环回调 |
+| Raccoon Work（商汤） | `free-raccoon` | 本包内登录 | 扫码 |
+| Qoder CN / Qoder | `free-qoder-cn` / `free-qoder` | 本机桌面端登录态 | 复用已有登录 |
+| TRAE CN / TRAE Global | `free-trae-cn` / `free-trae-ai` | 本机桌面端 / CLI 登录态 | 复用已有登录 |
 
-登录入口由各渠道的 `login()` 提供：设备码渠道把 URL 与短码交给 `onPrompt`，
-回调渠道把授权 URL 交给 `onPrompt`，扫码渠道把二维码内容交给 `onPrompt`。
 凭据保存在 `~/.pi/agent/cache/pi-connect-free/credential-<渠道>.json`（0600）。
+Qoder / TRAE 不写这个文件——它们每次都从各自桌面端读取。
+
+### 验证到什么程度
+
+诚实区分「实现并实测」与「实现但未联调」：
+
+| 渠道 | 状态 |
+| --- | --- |
+| Kilo | ✅ 实测：15 个模型、完整流式对话 |
+| TRAE CN | ✅ 实测：16 个模型 |
+| Cline | ✅ 设备码端点实测取到短码，轮询正确 |
+| MiniMax | ✅ 设备码端点实测取到短码，`slow_down` 累积生效，协议翻译有单测 |
+| CodeArts | ✅ 签名格式与可重复性实测 |
+| LobsterAI | ⚠️ 已实现，本机无登录态，**未跑通真实授权** |
+| Raccoon | ⚠️ 已实现，本机无登录态，**未跑通真实授权** |
+| Qoder | ⚠️ 本机 token 已过期，上游返回 403 |
+
+标 ⚠️ 的三个是最可能还需要调整的。
 
 ## 不支持哪些渠道，以及为什么
 
@@ -47,7 +63,9 @@ pi install npm:@citie114514/pi-connect-free
 
 或直接把本目录复制到 `~/.pi/agent/extensions/pi-connect-free`。
 
-> 本包的 Qoder / TRAE 渠道依赖同级的 `pi-connect-qoder` 与 `pi-connect-trae`。这两个包缺失时，本包会跳过对应渠道并在日志里说明原因；Kilo 渠道不受影响。
+**依赖**：Qoder / TRAE 两个渠道复用同级 `pi-connect-qoder` 与 `pi-connect-trae`
+的协议实现，本包不重复实现它们的私有协议。这两个包缺失时，对应渠道会跳过并在
+日志里说明原因；其余渠道不受影响。
 
 ## 登录
 
@@ -71,11 +89,21 @@ Qoder 和 TRAE 不需要这一步——它们直接用桌面端已登录的账�
 ## 使用
 
 ```powershell
-pi --list-models                       # 看到 free-kilo / free-qoder-cn / free-trae-cn …
+pi --list-models                                    # 列出所有渠道的模型
+pi --provider free-kilo --model kilo-auto/free --print "你好"
 pi --provider free-trae-cn --model Doubao-Seed-2.1-Turbo --print "你好"
 ```
 
-模型 ID 不带渠道前缀（`kilo-auto/free`、`Doubao-Seed-2.1-Turbo` 这类），渠道由 provider 区分。
+模型 ID 不带渠道前缀（`kilo-auto/free`、`Doubao-Seed-2.1-Turbo` 这类），渠道由
+provider 区分。同一模型可能出现在多个渠道下，按需要选。
+
+## 测试
+
+```powershell
+node test-free.cjs
+```
+
+全部离线：上游用注入的 fetch 与受控响应代替，不消耗任何真实额度。
 
 ## 设计上的几个选择
 
@@ -90,3 +118,7 @@ pi --provider free-trae-cn --model Doubao-Seed-2.1-Turbo --print "你好"
 - Kilo 免费池的模型卡明确声明 **prompt 可能被上游记录并用于改进其服务**。请勿发送敏感内容。
 - 免费额度由上游单方面决定，随时可能限流、变更或下线。本包只是这些渠道的客户端，不提供也不承诺任何额度。
 - 上游协议是私有的，改动不通知。某个渠道失效时，通常需要更新对应通道的协议实现。
+- **缺的渠道是刻意缺的**，不是没做完：OpenCode Zen / Gemini / ZCode 三类需要伪装成
+  另一家客户端或绕过人机验证，见上文「不支持哪些渠道」。`/free-status` 与
+  `EXCLUDED_CHANNELS` 里都能查到同一份理由。
+- 本包不保存对话内容、不上传统计；唯一落盘的是各渠道的凭据与模型目录缓存。
