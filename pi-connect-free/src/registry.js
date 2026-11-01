@@ -31,7 +31,12 @@
  */
 const MODULES = [
   { id: 'kilo', name: 'Kilo Free Pool', path: './providers/kilo.js' },
+  { id: 'cline', name: 'Cline', path: './providers/cline.js' },
+  { id: 'codearts', name: 'CodeArts', path: './providers/codearts.js' },
+  { id: 'lobsterai', name: 'LobsterAI', path: './providers/lobsterai.js' },
+  { id: 'minimax', name: 'MiniMax Code', path: './providers/minimax.js' },
   { id: 'qoder', name: 'Qoder', path: './providers/qoder.js' },
+  { id: 'raccoon', name: 'Raccoon Work', path: './providers/raccoon.js' },
   { id: 'trae', name: 'TRAE', path: './providers/trae.js' },
 ]
 
@@ -84,6 +89,12 @@ export const EXCLUDED_CHANNELS = Object.freeze([
     name: 'OpenCode Zen',
     reason:
       'its free tier only answers clients that imitate the vendor’s own CLI (forged User-Agent, a session id the server decodes back into a timestamp, and re-declared tools the request never sent). That defeats an access-control check the upstream is actively making, so this package does not implement it.',
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini (Cloud Code Assist)',
+    reason:
+      'reaching it requires reproducing another vendor client byte for byte — five identity headers, no extra headers, and alphabetically ordered JSON so the request is indistinguishable from that client. Same class as OpenCode Zen: the upstream is deciding who is calling, and the answer would be a fiction.',
   },
   {
     id: 'zcode',
