@@ -49,6 +49,25 @@ pi install npm:@citie114514/pi-connect-free
 
 > 本包的 Qoder / TRAE 渠道依赖同级的 `pi-connect-qoder` 与 `pi-connect-trae`。这两个包缺失时，本包会跳过对应渠道并在日志里说明原因；Kilo 渠道不受影响。
 
+## 登录
+
+在 Pi 里输入：
+
+```
+/free-status              查看哪些渠道需要登录
+/free-login minimax       登录 MiniMax（设备码）
+/free-login cline         登录 Cline（设备码）
+/free-login lobsterai     登录 LobsterAI（浏览器授权）
+/free-login codearts      登录 CodeArts（浏览器授权）
+/free-login raccoon       登录 Raccoon（扫码）
+/free-logout minimax      清除登录
+```
+
+设备码渠道会给出一个 URL 和短码：打开 URL，输入短码，回来等它自动完成。
+回调渠道只要在浏览器里点授权，本机监听会接住回跳。扫码渠道把给出的 URL 用手机扫。
+
+Qoder 和 TRAE 不需要这一步——它们直接用桌面端已登录的账号。
+
 ## 使用
 
 ```powershell
