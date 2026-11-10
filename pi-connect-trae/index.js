@@ -117,6 +117,27 @@ function saveCachedCatalog(region, models, logger) {
 }
 
 /**
+ * Whether a stored credential can still be turned into a usable token.
+ *
+ * `check()` reports a provider as available from the stored credential alone,
+ * so it must not refresh (see its comment). That leaves one question it still
+ * has to answer honestly: is this credential merely *stale* — an expired
+ * access token with a live refresh token, which the next request will renew —
+ * or is it *dead* — expired, with no refresh token or an expired one, which
+ * only a fresh sign-in in Trae can fix? A stale credential belongs in the
+ * model list; a dead one does not, because nothing a user does in Pi can make
+ * it work.
+ */
+function isTraeCredentialRecoverable(credential) {
+  // 30 s of clock skew, matching the store's own refresh margin: a token that
+  // is about to expire is renewed by the request path, not treated as dead.
+  if (credential.expiresAtMs > Date.now() + 30_000) return true;
+  if (credential.refreshToken === undefined) return false;
+  if (credential.refreshExpiresAtMs === undefined) return true;
+  return credential.refreshExpiresAtMs > Date.now();
+}
+
+/**
  * Logger that keeps quiet unless `PI_CONNECT_DEBUG=1`.
  *
  * Pi's TUI owns the terminal: a stray `console.info` during activation prints
@@ -516,9 +537,28 @@ function createTraePiProvider(stack, logger) {
         name: `${displayName} loopback shim token`,
         async check() {
           try {
-            const credential = await stack.store.resolve();
+            // Answer from the stored credential WITHOUT resolving it, exactly
+            // as `identity()` does above and for the same reason: `resolve()`
+            // starts a token refresh, and a refresh that fails for any reason
+            // (network, upstream 5xx, a rotated-away refresh token) threw here
+            // and was swallowed into `undefined`. Pi treats a falsy check as
+            // "not signed in" and removes the provider from the model list, so
+            // a transient refresh failure looked like "Trae 又没了" — the
+            // account was still signed in the whole time, and the very next
+            // attempt would have refreshed fine.
+            //
+            // A stored-but-unusable credential is reported as available on
+            // purpose: hiding the provider gives the user nothing to act on,
+            // while keeping it means the request path surfaces the real error
+            // ("sign in again in Trae") at the moment they try a model. The one
+            // exception is a credential that is genuinely unrecoverable — an
+            // expired access token whose refresh token is missing or also
+            // expired — because there the models cannot work until the user
+            // signs in again, and a visible-but-dead provider is just noise.
+            const credential = await stack.store.current();
             if (credential === undefined) return undefined;
             if (regionOfCredential(credential) !== region) return undefined;
+            if (!isTraeCredentialRecoverable(credential)) return undefined;
             return { type: "api_key", source: displayName };
           } catch {
             return undefined;

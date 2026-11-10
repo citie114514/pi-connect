@@ -1089,13 +1089,33 @@ var TraeCredentialStore = class {
 	*/
 	async readAll() {
 		const { credentials: desktop } = await this.readDesktopAll();
-		const credentials = [...desktop.filter((credential) => this.matchesRegion(credential))];
-		for (const own of await this.readOwns()) {
-			if (!this.matchesRegion(own)) continue;
-			if (credentials.some((credential) => traeAccountId(credential) === traeAccountId(own))) continue;
-			credentials.push(own);
-		}
-		return credentials;
+		// One entry per account, keeping the copy that expires LAST.
+		//
+		// The two copies are not interchangeable: Trae's own storage.json is
+		// only written on sign-in, while the plugin-owned copy is written on
+		// every refresh — and the SOLO refresh contract ROTATES the refresh
+		// token, so each refresh invalidates the copy left in storage.json.
+		// Re-using that dead token answers 401 / code 20101, which the request
+		// path surfaces as a throw and `auth.apiKey.check` used to swallow into
+		// `undefined` — Pi's "not signed in", i.e. "Trae 又没了".
+		//
+		// Ordering by access-token expiry is what the DSH bundle's own
+		// `readAll` does. A tie means neither copy has been written since the
+		// other, so no rotation happened and both refresh tokens are the
+		// original — the incumbent is as good as the challenger.
+		// Observed 2026-11-10: TRAE SOLO CN's storage.json (last written
+		// 2026-10-12) failed while the plugin's own copy answered 200 on the
+		// same host and client id.
+		const byAccount = new Map();
+		const consider = (credential) => {
+			if (!this.matchesRegion(credential)) return;
+			const id = traeAccountId(credential);
+			const incumbent = byAccount.get(id);
+			if (incumbent === void 0 || credential.expiresAtMs > incumbent.expiresAtMs) byAccount.set(id, credential);
+		};
+		for (const credential of desktop) consider(credential);
+		for (const own of await this.readOwns()) consider(own);
+		return [...byAccount.values()];
 	}
 	/**
 	* Which paths were tried and why each one failed. Read-only and token-free:

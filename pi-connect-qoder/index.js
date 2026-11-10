@@ -310,9 +310,22 @@ function createQoderPiProvider(runtime, logger) {
           // never starts the shim — it answers from the credential alone, so a
           // session-less invocation (e.g. `pi --list-models`) can list models
           // without opening a socket.
-          const credential = await runtime.resolveCredential();
-          if (!isCredentialUsable(credential)) return undefined;
-          return { type: "api_key", source: region.displayName };
+          //
+          // Never throw out of here. Pi calls every provider's `check` inside
+          // one `Promise.all` (`ModelsImpl.getAuthenticatedProviders`) and wraps
+          // a rejection in `ModelsError`, so a single throwing provider takes
+          // down the model list for ALL of them — not just its own region. The
+          // credential read spawns a DPAPI helper, whose failures are real and
+          // transient; answer "not signed in" for this region and leave the
+          // others listing.
+          try {
+            const credential = await runtime.resolveCredential();
+            if (!isCredentialUsable(credential)) return undefined;
+            return { type: "api_key", source: region.displayName };
+          } catch (error) {
+            logger.warn?.(`${region.displayName}: credential check failed`, error);
+            return undefined;
+          }
         },
         async resolve({ credential }) {
           // Never start a socket for a region with no usable sign-in: the

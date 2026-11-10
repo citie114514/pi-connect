@@ -128,6 +128,26 @@ node build-core.mjs
 > 脚本已经包含「删掉每请求调试输出」这一步（`4e`），所以重建至少不会把 issue #1 里那条
 > `chat request received {...}` 带回来。
 
+## 测试
+
+```powershell
+node test-credentials.mjs
+```
+
+凭据选择的离线回归测试（无网络、不读真实凭据文件），覆盖两个曾让 Trae 从 Pi 模型列表里
+消失的缺陷：
+
+1. **刷新令牌轮换后选错副本。** SOLO 的 refresh 契约每刷新一次就轮换 refresh token，
+   Trae 自己 `storage.json` 里那份随之失效（401 / code 20101）。旧 `readAll()` 先收桌面副本、
+   遇到同一账号的自有副本只做「跳过」，于是永远钉在死令牌上。
+2. **`check()` 触发刷新并吞掉异常。** `store.resolve()` 会启动刷新，失败被 `catch` 成
+   `undefined`，而 Pi 把 falsy 的 `check` 当作「未登录」并移除整个供应商 —— 一次瞬时刷新
+   失败看起来就是账号没了。
+
+现在 `check()` 只读存储的凭据（与 `identity()` 同一套 `store.current()` 约定，不触发刷新），
+并且只对「彻底不可恢复」的凭据报未登录：访问令牌过期且 refresh token 缺失或也已过期。
+其余情况供应商照常出现，真正的错误在用户实际发请求时由请求路径抛出。
+
 ## 许可
 
 MIT
