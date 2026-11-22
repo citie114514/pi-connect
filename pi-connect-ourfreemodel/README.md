@@ -49,6 +49,23 @@ pi --provider ourfree --model hy4-flash-free --print "你好"
 渠道在模型列表里是**平铺**的：Our Free Model 用同一份 `/v1/models` 暴露所有渠道，
 按模型 id 在内部路由。
 
+### 与 pi-connect-qoder / pi-connect-trae 的关系
+
+本包也有 Qoder 和 TRAE 渠道，但它们**从本机桌面应用读取登录态**是那两个独立包的
+做法；本包的这两个渠道需要你在管理页面里用账号登录一次。
+
+两边都装是本包推荐的用法（各自独立、互不影响），代价是同一个模型可能同时出现在
+`trae` 和 `ourfree` 下。这不是冲突——provider 不同，选哪个都能用：
+
+| 需求 | 用哪个 |
+| --- | --- |
+| 只想用桌面端已登录的 Qoder / TRAE | `qoder-cn` / `trae`（独立包，零配置） |
+| 想用 LobsterAI / Loomy / Raccoon / Cline / MiniMax / ZCode / Gemini | `ourfree`（本包独有） |
+| Qoder / TRAE 有多账号、要账号池与积分管理 | `ourfree`（本包提供账号池） |
+
+如果只想用本包独有的渠道，不登录这里的 Qoder / TRAE 即可——未登录的渠道不产生
+任何模型，列表里自然不会有重复项。
+
 ## 账号渠道怎么登录
 
 免密免费池**不需要登录**，装完就能用。

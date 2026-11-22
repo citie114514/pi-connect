@@ -22,6 +22,7 @@
     "commands.js",
     "lib",
     "skills",
+    "test-queue-wait.mjs",
     "README.md",
     "THIRD_PARTY_NOTICES.md"
   ],
