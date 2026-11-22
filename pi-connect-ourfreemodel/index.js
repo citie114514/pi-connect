@@ -63,6 +63,24 @@ const CATALOG_RETRY_AFTER_FAILURE_MS = 60 * 1000;
 /** How long the model-list call may take before the cached roster is used. */
 const CATALOG_FETCH_TIMEOUT_MS = 8000;
 
+/**
+ * How long to wait for the service's channel runtime before listing models.
+ *
+ * `/v1/models` is assembled from `llm.listProviders()`, and the account-channel
+ * lanes attach to that runtime *after* the HTTP listener is already up. Measured
+ * on a migrated data dir (2026-11): the listener answers immediately with the 26
+ * free-pool rows, and the first account rows appear ~2–4 s later, at which point
+ * the roster is 44. A catalog fetched in that window silently records only the
+ * free pool — and because the result is cached for `CATALOG_TTL_MS`, the account
+ * channels then stay invisible for a full ten minutes.
+ *
+ * So the first fetch waits on the service's own readiness promise instead of
+ * racing it. The bound is generous relative to the measured 2–4 s because a cold
+ * start also has to read the account pool off disk, and an expired roster is
+ * cheaper than a roster missing every paid channel.
+ */
+const CATALOG_READY_TIMEOUT_MS = 20_000;
+
 /** Pi-owned cache root, kept out of Our Free Model's own data dir. */
 function cacheDir() {
   return join(homedir(), ".pi", "agent", "cache", "pi-connect-ourfreemodel");
@@ -247,6 +265,40 @@ class Runtime {
     return flight;
   }
 
+  /**
+   * Wait for the account-channel lanes to attach, so they appear in the roster.
+   *
+   * `service.ready` resolves when the channel runtime is up *and* the service's
+   * own first catalog refresh finished. Awaiting it is the only way to tell the
+   * difference between "this account pool is empty" and "the channels have not
+   * attached yet" — both answer `/v1/models` with the free pool only.
+   *
+   * Never rejects and never blocks forever: a timeout or a failed readiness
+   * promise just means the fetch proceeds with whatever the service serves, and
+   * the TTL retry picks up the channels on the next round. A late roster beats
+   * no roster.
+   */
+  async #awaitChannelRuntime() {
+    const ready = this.service.handle?.ready;
+    if (ready === undefined || typeof ready.then !== "function") return;
+    let timer;
+    try {
+      await Promise.race([
+        ready.then(() => undefined, () => undefined),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, CATALOG_READY_TIMEOUT_MS);
+          // Pi may exit while this is pending; an unref'd timer must not be what
+          // keeps the process alive.
+          timer.unref?.();
+        }),
+      ]);
+    } catch {
+      // readiness is advisory — fall through to the fetch
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async #fetchCatalog() {
     const position = await this.service.ensure();
     if (position === undefined) {
@@ -256,6 +308,7 @@ class Runtime {
       this.failedAt = Date.now();
       return undefined;
     }
+    await this.#awaitChannelRuntime();
     const deadline = AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS);
     let response;
     try {
@@ -474,4 +527,5 @@ export const internals = {
   toPiModel,
   CATALOG_TTL_MS,
   CATALOG_RETRY_AFTER_FAILURE_MS,
+  CATALOG_READY_TIMEOUT_MS,
 };

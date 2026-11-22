@@ -312,6 +312,15 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
     assert.ok(index.internals.CATALOG_RETRY_AFTER_FAILURE_MS < index.internals.CATALOG_TTL_MS);
   });
 
+  await test("the readiness wait is bounded and shorter than the catalog TTL", () => {
+    // Measured: account channels attach ~2–4 s after the listener comes up. The
+    // bound has to be comfortably above that, or the roster keeps excluding
+    // them; and far below the TTL, or a hung channel runtime would stall the
+    // first fetch past the point where the cache could ever be written.
+    assert.ok(index.internals.CATALOG_READY_TIMEOUT_MS >= 10_000);
+    assert.ok(index.internals.CATALOG_READY_TIMEOUT_MS < index.internals.CATALOG_TTL_MS);
+  });
+
   // --- 13. The login surface ---
   await test("activation registers exactly the login and status commands", async () => {
     const commands = [];
