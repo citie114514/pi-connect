@@ -312,6 +312,113 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
     assert.ok(index.internals.CATALOG_RETRY_AFTER_FAILURE_MS < index.internals.CATALOG_TTL_MS);
   });
 
+  // --- 13. The login surface ---
+  await test("activation registers exactly the login and status commands", async () => {
+    const commands = [];
+    const providers = [];
+    await index.default({
+      registerProvider: (p) => providers.push(p),
+      on: () => {},
+      registerCommand: (name) => commands.push(name),
+    });
+    assert.deepEqual(providers.map((p) => p.id), ["ourfree"]);
+    assert.deepEqual(commands.sort(), ["ourfreemodel-login", "ourfreemodel-status"]);
+  });
+
+  await test("the login command surfaces a management link with a bootstrap token", async () => {
+    // The service is the only thing that can mint this link, so a fake one
+    // stands in: what is under test is that the command hands the URL to the
+    // user rather than swallowing it.
+    const commands = await import(pathToFileURL(join(__dirname, "commands.js")).href);
+    let registered;
+    const fakeRuntime = {
+      models: [],
+      service: {
+        lastFailure: undefined,
+        async ensure() {
+          return {
+            url: "http://127.0.0.1:1",
+            key: "k",
+            dataDir: "/tmp/x",
+            version: "test",
+            root: "/vendored/ofm",
+            managementUrl: "http://127.0.0.1:1/#login=abc123",
+          };
+        },
+        get position() {
+          return undefined;
+        },
+        get handle() {
+          return undefined;
+        },
+      },
+    };
+    const byName = new Map();
+    commands.registerOurFreeModelCommands(
+      { registerCommand: (name, def) => byName.set(name, def) },
+      fakeRuntime,
+    );
+    registered = { name: "ourfreemodel-login", def: byName.get("ourfreemodel-login") };
+    assert.ok(registered.def !== undefined, "login command was not registered");
+
+    const notices = [];
+    const printed = [];
+    const originalLog = console.log;
+    console.log = (...args) => printed.push(args.join(" "));
+    try {
+      await registered.def.handler([], { ui: { notify: (text) => notices.push(text) } });
+    } finally {
+      console.log = originalLog;
+    }
+    const all = [...notices, ...printed].join("\n");
+    assert.match(all, /#login=abc123/, `expected the link to reach the user, got: ${all}`);
+    assert.match(all, /一次性/, "expected the one-time-use warning");
+  });
+
+  await test("the status command never invents a signed-in state", async () => {
+    const commands = await import(pathToFileURL(join(__dirname, "commands.js")).href);
+    let registered;
+    const fakeRuntime = {
+      models: [{ id: "m" }],
+      service: {
+        lastFailure: undefined,
+        position: { dataDir: "/tmp/x", version: "test", root: "/vendored/ofm" },
+        async ensure() {
+          return this.position;
+        },
+        get handle() {
+          // The real surface: `state()` reports the runtime's health, and
+          // `providers` is a bare id list — neither carries sign-in state.
+          return { channels: { state: () => ({ state: "ready", error: "" }), providers: ["lobsterai", "qoder"] } };
+        },
+      },
+    };
+    const byName = new Map();
+    commands.registerOurFreeModelCommands(
+      { registerCommand: (name, def) => byName.set(name, def) },
+      fakeRuntime,
+    );
+    const def = byName.get("ourfreemodel-status");
+    assert.ok(def !== undefined, "status command was not registered");
+    registered = { name: "ourfreemodel-status", def };
+    const notices = [];
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await registered.def.handler([], { ui: { notify: (text) => notices.push(text) } });
+    } finally {
+      console.log = originalLog;
+    }
+    const text = notices.join("\n");
+    // Health is reported as the service states it…
+    assert.match(text, /渠道运行时：ready/, `expected the runtime state, got: ${text}`);
+    // …the channel list is reported as ids…
+    assert.match(text, /lobsterai/, `expected the channel ids, got: ${text}`);
+    // …and sign-in is pointed at, never invented from absent data.
+    assert.match(text, /ourfreemodel-login/);
+    assert.doesNotMatch(text, /已登录|未登录/);
+  });
+
   rmSync(root, { recursive: true, force: true });
 
   if (failures.length > 0) {

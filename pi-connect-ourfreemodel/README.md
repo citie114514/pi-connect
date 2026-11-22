@@ -4,7 +4,8 @@
 的免费池与已登录账号渠道接进 Pi coding agent。
 
 **开箱即用**：服务本体已随包附带（`vendor/ofm/`），不需要装 DSH，不需要先装上游包，
-也不需要任何额外运行时。
+也不需要任何额外运行时。免密免费池装完即可对话；账号渠道在 Pi 里用
+`/ourfreemodel-login` 打开管理页面登录。
 
 ## 为什么是薄适配层 + 自带服务
 
@@ -50,17 +51,32 @@ pi --provider ourfree --model hy4-flash-free --print "你好"
 
 ## 账号渠道怎么登录
 
-账号渠道的登录发生在 **Our Free Model 自己的管理页面**，本包不介入——这也是
-不复刻登录流程的意义。要登录 LobsterAI / Qoder / TRAE 等：
+免密免费池**不需要登录**，装完就能用。
 
-```powershell
-node "~/.pi/agent/extensions/pi-connect-ourfreemodel/vendor/ofm/packages/standalone/cli.mjs" --data-dir <Pi 的 ofm 数据目录>
+要接入已登录的账号渠道（LobsterAI / Qoder / TRAE / Cline / Loomy / Raccoon /
+MiniMax / ZCode / Gemini），在 Pi 会话里执行：
+
+```
+/ourfreemodel-login     打开管理页面（一次性链接，10 分钟有效）
+/ourfreemodel-status    查看服务状态与已接入的渠道
 ```
 
-启动时会打印一次性管理链接，在浏览器里打开即可登录账号、查看积分与额度。
-**注意**：让这个独立进程使用的数据目录与 Pi 不同（见下节），否则两者会争同一把锁。
+`/ourfreemodel-login` 会打开浏览器并同时把链接打印到终端——自动打开只是便利，
+链接本身才是交付物（headless 会话、锁定的桌面都能手动访问）。链接带一次性
+bootstrap token，打开后即失效；失效就再执行一次命令拿新的。
 
-不登录账号也能用：免密免费池开箱即用，只是额度受上游限制。
+管理页面里可以：
+- 逐个登录账号渠道、查看账号池与积分
+- 查看/领取各渠道额度
+- 调整模型可见性等设置
+
+**为什么是在网页里登录而不是在 Pi 里敲命令**：这些渠道各自是不同协议
+（设备码、回环回调、扫码、人机验证），Our Free Model 已经把它们全部实现了一遍。
+在 Pi 侧再做一遍只会把协议工作分叉出去，上游一变就失配。所以本包负责的是
+「让那个页面在 Pi 会话里够得着」，而不是再造一套登录。
+
+关键点：开这个页面**不需要另起进程**——服务本来就在 Pi 进程里跑着，所以不存在
+和数据目录锁冲突的问题（这正是下面数据目录那节的约束）。
 
 ## 数据目录与锁（重要）
 
@@ -74,19 +90,19 @@ node "~/.pi/agent/extensions/pi-connect-ourfreemodel/vendor/ofm/packages/standal
 只能跑一个实例，而锁文件只记 pid、不记端口，所以第二个进程**无法接管**已有实例。
 共用目录的后果不是「共享账号池」，而是「只要独立服务开着，Pi 就用不了」。
 
-想让 Pi 用你已有的账号池，显式指定：
+所以：**登录请用 `/ourfreemodel-login`**，不要另起 `cli.mjs` 进程。如果你确实要
+在终端里跑独立服务（比如用它自己的网页看运行日志），把它指向另一个目录：
 
 ```powershell
-$env:PI_OURFREEMODEL_DATA_DIR = "$env:USERPROFILE\.our-free-model"
+node "$env:USERPROFILE\.pi\agent\extensions\pi-connect-ourfreemodel\vendor\ofm\packages\standalone\cli.mjs" --data-dir "$env:USERPROFILE\ofm-standalone"
 ```
-
-代价是两者不能同时运行。
 
 | 变量 | 作用 |
 | --- | --- |
 | `PI_OURFREEMODEL_DATA_DIR` | Pi 用的数据目录（优先级最高） |
 | `OFM_HOME` | 上游自己的变量，本包在其未设置时也会用 |
 | `PI_OURFREEMODEL_PATH` | 改用外部的 `dsh-our-free-model` 安装，而不是自带的 |
+| `PI_OFM_GEMINI_CLIENT_ID` / `_SECRET` | 覆盖内置的 Gemini CLI installed-app 客户端标识 |
 
 ## 免费池的 Bun 传输
 
@@ -113,7 +129,7 @@ Pi 在 `--list-models`、启动选择器和 `/scoped-models` 里是**同步**读
 node test-ourfreemodel.cjs
 ```
 
-29 项离线断言：解析顺序（自带副本优先、外部安装作后备、覆盖变量可指定）、
+32 项离线断言：解析顺序（自带副本优先、外部安装作后备、覆盖变量可指定）、
 数据目录优先级、key 读取、传输选择、模型行归一化、Pi 模型映射（含 Pi 渲染器
 必需的 `input` / `cost` 字段）、缓存往返。
 
@@ -128,7 +144,9 @@ node test-ourfreemodel.cjs
 | Pi 端到端对话 | ✅ 实测：`hy4-flash-free` 在 Pi 里返回正常回复 |
 | 模型清单 | ✅ 实测：26 个模型 |
 | 上游免费池可用性 | ⚠️ 波动：多数池当日返回 429（上游额度限制） |
-| 账号渠道（LobsterAI / Qoder / TRAE 等） | ⚠️ 未联调：需先在管理页面登录 |
+| `/ourfreemodel-login` 管理页面 | ✅ 实测：页面 200、一次性 token 可换取管理会话 |
+| `/ourfreemodel-status` 渠道列表 | ✅ 实测：10 个渠道 runtime ready |
+| 账号渠道实际登录 | ⚠️ 未联调：本机未在管理页面登录过任何账号 |
 
 ## 已知边界
 

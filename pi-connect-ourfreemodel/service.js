@@ -333,7 +333,19 @@ export class OurFreeModelService {
       this.logger?.warn?.(`ourfreemodel: ${this.lastFailure}`);
       return undefined;
     }
-    this.position = { url: service.url, key, dataDir, version: resolved.version, root: resolved.root };
+    this.position = {
+      url: service.url,
+      key,
+      dataDir,
+      version: resolved.version,
+      root: resolved.root,
+      // The one-time management link, captured here because the service only
+      // reveals it while its bootstrap token is still live (10 minutes) and the
+      // fragment becomes empty the moment someone opens it. `/ourfreemodel-login`
+      // hands this to the user, which is how channels get signed in from inside
+      // Pi without starting a second process against the same lock.
+      managementUrl: typeof service.managementUrl === "string" ? service.managementUrl : `${service.url}/`,
+    };
     this.lastFailure = undefined;
     this.logger?.info?.(
       `ourfreemodel: service ${resolved.version} listening on ${service.url} (${service.channels ? "channels ready" : "channels pending"})`,

@@ -40,6 +40,7 @@ import {
   resolveDataDir,
   resolveOurFreeModelEntry,
 } from "./service.js";
+import { registerOurFreeModelCommands } from "./commands.js";
 
 /** The single provider id this extension owns. */
 export const PROVIDER_ID = "ourfree";
@@ -419,6 +420,10 @@ export default async function activate(pi) {
       ctx?.ui?.notify?.(`Our Free Model 预热失败，模型可能不可用（${error?.message ?? error}）`, "warning");
     }
   });
+
+  // Slash commands: the management page is where channels get signed in, and a
+  // session is the only place a listener may open, so this is the right scope.
+  registerOurFreeModelCommands(pi, runtime);
 
   pi.on?.("session_shutdown", () => {
     void runtime.close();
