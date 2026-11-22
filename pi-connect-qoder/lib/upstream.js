@@ -90,11 +90,31 @@ export const MAX_OUTPUT_TOKENS = 131072
  * This module therefore owns the wait. The budget stays well under the 300 s
  * idle ceiling the adapter declares, so a queued turn is never killed by the
  * stream watchdog while it waits.
+ *
+ * `PI_QODER_QUEUE_BUDGET_MS` raises or lowers it. That matters because the
+ * budget is a *choice about how long a user will stare at a spinner*, not a
+ * protocol constant: a queue that the gateway reports as one deep can outlast
+ * any fixed default, and the only way to find out whether waiting longer would
+ * have worked is to let the user ask for it.
  */
-export const QUEUE_WAIT_BUDGET_MS = 120000
+export const QUEUE_WAIT_BUDGET_MS = Number(process.env.PI_QODER_QUEUE_BUDGET_MS) > 0
+  ? Number(process.env.PI_QODER_QUEUE_BUDGET_MS)
+  : 120000
 
-/** Longest single sleep, so one absurd hint cannot stall a turn indefinitely. */
-export const QUEUE_WAIT_MAX_SLEEP_MS = 30000
+/**
+ * Longest single sleep, so one absurd hint cannot stall a turn indefinitely.
+ *
+ * This has to be at least as long as the hint the gateway actually gives, or the
+ * ladder defeats itself: Qoder answers a queued request with
+ * `retryAfterSeconds: 60`, and a 30 s ceiling turned each 60 s wait into two
+ * 30 s polls — re-submitting the request twice as often as the server asked,
+ * which is exactly the pressure that keeps a queue from draining. Measured
+ * 2026-11-11: the gateway kept answering `queueType: p4, queueCount: 1,
+ * retryAfterSeconds: 60` for 25 minutes of polling; the official client waits
+ * the full hint before re-sending. The ceiling stays finite so a bogus hint
+ * (an hour, say) cannot pin the turn forever.
+ */
+export const QUEUE_WAIT_MAX_SLEEP_MS = 60000
 
 /** Sleep before the first retry when the gateway gives no hint at all. */
 export const QUEUE_WAIT_MIN_SLEEP_MS = 1000
@@ -1462,15 +1482,20 @@ export function queueWaitFor(error, waitedMs, attempt) {
   const hinted =
     Number(error.retryAfterSeconds) > 0 ? Number(error.retryAfterSeconds) * 1000 : QUEUE_WAIT_MIN_SLEEP_MS
 
-  // Leave the first few attempts on the gateway's own advice; only start
-  // backing off further once it is clear the hint is not clearing the queue.
+  // The hint is a floor, never a target to undercut. Jitter and escalation may
+  // only push the pause LONGER than the gateway asked: re-submitting early is
+  // what keeps a queue occupied, and a queue that answers the same
+  // `retryAfterSeconds: 60` for 25 minutes of polling is the observable result
+  // (2026-11-11, queueType p4). The old shape multiplied the hint by
+  // 0.75..1.25, so roughly half of every retry fired before the server's own
+  // deadline.
   const GRACE_ATTEMPTS = 3
   const escalated =
     attempt > GRACE_ATTEMPTS
       ? QUEUE_WAIT_MIN_SLEEP_MS * 2 ** Math.min(attempt - GRACE_ATTEMPTS, 8)
       : 0
 
-  const target = Math.max(hinted, escalated) * (0.75 + Math.random() * 0.5)
+  const target = Math.max(hinted, escalated) * (1 + Math.random() * 0.15)
   // Clamp the target into [MIN, MAX] FIRST, then cap it at `remaining`.
   // The old shape — `Math.max(MIN, Math.min(target, MAX, remaining))` — put the
   // floor OUTSIDE the cap, so once the budget dropped below MIN_SLEEP the
@@ -1479,6 +1504,15 @@ export function queueWaitFor(error, waitedMs, attempt) {
   // full 1000 ms). The floor belongs to the retry policy, not to the budget;
   // a sub-second last sleep is cheap and buys one more real attempt.
   const clamped = Math.max(QUEUE_WAIT_MIN_SLEEP_MS, Math.min(target, QUEUE_WAIT_MAX_SLEEP_MS))
+  // A wait SHORTER than the hint is worse than no wait at all when the gateway
+  // named a deadline: re-submitting before it is exactly what keeps a queued
+  // request queued (measured: `retryAfterSeconds: 60` answered unchanged for
+  // 25 minutes of early re-polls). So when the remaining budget cannot cover
+  // the hint the turn ends here and the host retries with a fresh, honest
+  // attempt instead of us burning the last seconds on a doomed submission.
+  // A hintless failure (transport blip) still gets the partial sleep — there
+  // is no server deadline to undercut, and one more real attempt is worth it.
+  if (hinted > 0 && remaining < hinted) return undefined
   return Math.min(clamped, remaining)
 }
 
