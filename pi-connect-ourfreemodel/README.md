@@ -53,27 +53,51 @@ pi --provider ourfree --model hy4-flash-free --print "你好"
 
 免密免费池**不需要登录**，装完就能用。
 
-要接入已登录的账号渠道（LobsterAI / Qoder / TRAE / Cline / Loomy / Raccoon /
-MiniMax / ZCode / Gemini），在 Pi 会话里执行：
+要接入已登录的账号渠道，在 Pi 会话里执行：
 
 ```
 /ourfreemodel-login     打开管理页面（一次性链接，10 分钟有效）
-/ourfreemodel-status    查看服务状态与已接入的渠道
+/ourfreemodel-status    查看各渠道登录状态
 ```
 
-`/ourfreemodel-login` 会打开浏览器并同时把链接打印到终端——自动打开只是便利，
-链接本身才是交付物（headless 会话、锁定的桌面都能手动访问）。链接带一次性
-bootstrap token，打开后即失效；失效就再执行一次命令拿新的。
+### 具体步骤
 
-管理页面里可以：
-- 逐个登录账号渠道、查看账号池与积分
-- 查看/领取各渠道额度
-- 调整模型可见性等设置
+1. 在 Pi 里输入 `/ourfreemodel-login`。它会打开浏览器并同时把链接打印到终端。
+2. 管理页面左侧选 **免费账号渠道**，选一个渠道（如 LobsterAI）。
+3. 点该渠道的**添加账号**。各渠道的登录方式不同：
 
-**为什么是在网页里登录而不是在 Pi 里敲命令**：这些渠道各自是不同协议
-（设备码、回环回调、扫码、人机验证），Our Free Model 已经把它们全部实现了一遍。
-在 Pi 侧再做一遍只会把协议工作分叉出去，上游一变就失配。所以本包负责的是
-「让那个页面在 Pi 会话里够得着」，而不是再造一套登录。
+| 渠道 | 登录方式 |
+| --- | --- |
+| LobsterAI（有道） | 点「添加账号」后会打开有道授权页，浏览器登录后自动回跳 |
+| Qoder / Qoder CN | 同设备码/授权页形式，授权后自动回跳 |
+| TRAE | 授权页回跳 |
+| Cline / Loomy / Raccoon | 各自的设备码或扫码流程，页面会给出指引 |
+| MiniMax / ZCode / Gemini | 设备码或授权页 |
+
+回跳地址是本机的 `127.0.0.1:<随机端口>/auth/callback`，由服务自己接住，
+不需要你复制粘贴任何 token。
+
+4. 回到 Pi，模型列表里就会出现该渠道的模型（`/ourfreemodel-status` 可确认）。
+
+### `/ourfreemodel-status` 会告诉你什么
+
+```
+数据目录：C:\Users\...\pi-connect-ourfreemodel\ofm-data
+服务版本：2.7.2（随包附带）
+渠道运行时：ready
+已登录：lobsterai（1/2 账号启用）
+未登录：qoder、traecn、cline、loomy、raccoon、minimax、gemini、zcode
+```
+
+账号数来自 `provider.status`——和你在管理页面看到的是同一个数据源。
+如果那次调用失败，会明确显示「登录状态暂时无法读取」，**而不是显示成 0 个账号**
+（"问不到" 和 "确实没登录" 需要你做不同的事）。
+
+### 为什么是在网页里登录而不是在 Pi 里敲命令
+
+这些渠道各自是不同协议（授权页回跳、设备码、扫码、短信验证码），Our Free Model
+已经把它们全部实现了一遍。在 Pi 侧再做一遍只会把协议工作分叉出去，上游一变就
+失配。所以本包负责的是「让那个页面在 Pi 会话里够得着」，而不是再造一套登录。
 
 关键点：开这个页面**不需要另起进程**——服务本来就在 Pi 进程里跑着，所以不存在
 和数据目录锁冲突的问题（这正是下面数据目录那节的约束）。
@@ -129,7 +153,7 @@ Pi 在 `--list-models`、启动选择器和 `/scoped-models` 里是**同步**读
 node test-ourfreemodel.cjs
 ```
 
-32 项离线断言：解析顺序（自带副本优先、外部安装作后备、覆盖变量可指定）、
+33 项离线断言：解析顺序（自带副本优先、外部安装作后备、覆盖变量可指定）、
 数据目录优先级、key 读取、传输选择、模型行归一化、Pi 模型映射（含 Pi 渲染器
 必需的 `input` / `cost` 字段）、缓存往返。
 
@@ -145,8 +169,9 @@ node test-ourfreemodel.cjs
 | 模型清单 | ✅ 实测：26 个模型 |
 | 上游免费池可用性 | ⚠️ 波动：多数池当日返回 429（上游额度限制） |
 | `/ourfreemodel-login` 管理页面 | ✅ 实测：页面 200、一次性 token 可换取管理会话 |
-| `/ourfreemodel-status` 渠道列表 | ✅ 实测：10 个渠道 runtime ready |
-| 账号渠道实际登录 | ⚠️ 未联调：本机未在管理页面登录过任何账号 |
+| `/ourfreemodel-status` 登录状态 | ✅ 实测：经 `provider.status` 正确报告 10 个渠道均未登录 |
+| 登录发起（`account.create`） | ✅ 实测：LobsterAI 返回真实授权 URL 与回环回调地址 |
+| 登录回调完成 | ⚠️ 未联调：本机未走完任何渠道的授权 |
 
 ## 已知边界
 

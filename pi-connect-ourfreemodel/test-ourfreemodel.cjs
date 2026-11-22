@@ -387,9 +387,28 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
           return this.position;
         },
         get handle() {
-          // The real surface: `state()` reports the runtime's health, and
-          // `providers` is a bare id list — neither carries sign-in state.
-          return { channels: { state: () => ({ state: "ready", error: "" }), providers: ["lobsterai", "qoder"] } };
+          // The real surface: `state()` reports the runtime's health and
+          // `providers` is a bare id list; sign-in lives behind
+          // `channels.rpc("provider.status", …)`.
+          return {
+            channels: {
+              state: () => ({ state: "ready", error: "" }),
+              providers: ["lobsterai", "qoder"],
+              rpc: async (request) => {
+                assert.equal(request.method, "provider.status");
+                assert.deepEqual(request.payload.providers, ["lobsterai", "qoder"]);
+                return {
+                  ok: true,
+                  value: {
+                    statuses: {
+                      lobsterai: { accounts: { total: 2, enabled: 1 } },
+                      qoder: { accounts: { total: 0, enabled: 0 } },
+                    },
+                  },
+                };
+              },
+            },
+          };
         },
       },
     };
@@ -410,13 +429,51 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
       console.log = originalLog;
     }
     const text = notices.join("\n");
-    // Health is reported as the service states it…
     assert.match(text, /渠道运行时：ready/, `expected the runtime state, got: ${text}`);
-    // …the channel list is reported as ids…
-    assert.match(text, /lobsterai/, `expected the channel ids, got: ${text}`);
-    // …and sign-in is pointed at, never invented from absent data.
-    assert.match(text, /ourfreemodel-login/);
-    assert.doesNotMatch(text, /已登录|未登录/);
+    // Account counts come from the same call the management page makes.
+    assert.match(text, /已登录：lobsterai（1\/2 账号启用）/, `expected the signed-in channel, got: ${text}`);
+    assert.match(text, /未登录：qoder/, `expected the signed-out channel, got: ${text}`);
+  });
+
+  await test("status degrades to 'unknown' when provider.status fails", async () => {
+    // "Could not ask" must never render as "0 accounts signed in": those call
+    // for different user action, and a false zero would send someone through a
+    // login they do not need.
+    const commands = await import(pathToFileURL(join(__dirname, "commands.js")).href);
+    const fakeRuntime = {
+      models: [],
+      service: {
+        lastFailure: undefined,
+        position: { dataDir: "/tmp/x", version: "test", root: "/vendored/ofm" },
+        get handle() {
+          return {
+            channels: {
+              state: () => ({ state: "ready", error: "" }),
+              providers: ["lobsterai"],
+              rpc: async () => {
+                throw new Error("simulated rpc failure");
+              },
+            },
+          };
+        },
+      },
+    };
+    const byName = new Map();
+    commands.registerOurFreeModelCommands(
+      { registerCommand: (name, def) => byName.set(name, def) },
+      fakeRuntime,
+    );
+    const notices = [];
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await byName.get("ourfreemodel-status").handler([], { ui: { notify: (t) => notices.push(t) } });
+    } finally {
+      console.log = originalLog;
+    }
+    const text = notices.join("\n");
+    assert.match(text, /无法读取/, `expected an explicit unknown, got: ${text}`);
+    assert.doesNotMatch(text, /未登录：/, "a failed status call must not be reported as signed out");
   });
 
   rmSync(root, { recursive: true, force: true });

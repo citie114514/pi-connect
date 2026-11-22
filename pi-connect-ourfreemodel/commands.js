@@ -62,15 +62,14 @@ function openInBrowser(url) {
 /**
  * Summarize the service's channel surface.
  *
- * `channels.state()` answers the *runtime's own* health (`{state: "ready"}`),
- * not per-channel sign-in: the service keeps credentials in its management
- * layer and only exposes a provider id list here. So this reports what is
- * actually known — which channels exist and whether the runtime is healthy —
- * and points at `/ourfreemodel-login` for the part it cannot answer. Inventing
- * a "not signed in" column from absent data would send users through logins
- * they do not need.
+ * `channels.state()` answers only the *runtime's own* health (`{state:"ready"}`).
+ * Per-channel account counts come from `channels.rpc("provider.status", …)`,
+ * which is what the management page itself uses — so this asks the same source
+ * rather than guessing from absent fields. When that call fails the sign-in
+ * column is omitted entirely rather than shown as zero, because "0 accounts"
+ * and "could not ask" call for different user action.
  */
-function describeChannels(handle) {
+async function describeChannels(handle) {
   const lines = [];
   let runtimeState;
   try {
@@ -89,12 +88,55 @@ function describeChannels(handle) {
   } catch {
     ids = [];
   }
-  if (Array.isArray(ids) && ids.length > 0) {
-    const shown = ids.slice(0, MAX_LISTED_CHANNELS);
-    lines.push(`已接入渠道：${shown.join("、")}${ids.length > shown.length ? ` 等 ${ids.length} 个` : ""}`);
-    lines.push("各渠道的登录状态请在管理页面查看（/ourfreemodel-login）");
-  } else {
+  if (!Array.isArray(ids) || ids.length === 0) {
     lines.push("没有可列出的渠道");
+    return lines;
+  }
+
+  // Ask the channel runtime for account counts, the same call the management
+  // page makes. A failure here is reported as "unknown", never as "0 accounts".
+  let statuses;
+  try {
+    const answer = await handle.channels.rpc?.(
+      { method: "provider.status", payload: { providers: ids } },
+      AbortSignal.timeout(30_000),
+    );
+    if (answer?.ok === true && answer.value?.statuses !== undefined) statuses = answer.value.statuses;
+  } catch {
+    statuses = undefined;
+  }
+
+  if (statuses === undefined) {
+    lines.push(`已接入渠道（${ids.length} 个）：${ids.join("、")}`);
+    lines.push("登录状态暂时无法读取（provider.status 调用失败）");
+    return lines;
+  }
+
+  const signedIn = [];
+  const signedOut = [];
+  for (const id of ids) {
+    const entry = statuses[id];
+    const accounts = entry?.accounts;
+    // Only a numeric `total` is trusted. An absent field means the runtime did
+    // not report on this channel, which is not the same as zero accounts.
+    const total = typeof accounts?.total === "number" ? accounts.total : undefined;
+    if (total === undefined) {
+      signedOut.push(`${id}（未知）`);
+    } else if (total > 0) {
+      const enabled = typeof accounts.enabled === "number" ? accounts.enabled : total;
+      signedIn.push(`${id}（${enabled}/${total} 账号启用）`);
+    } else {
+      signedOut.push(id);
+    }
+  }
+  if (signedIn.length > 0) lines.push(`已登录：${signedIn.join("、")}`);
+  if (signedOut.length > 0) {
+    const shown = signedOut.slice(0, MAX_LISTED_CHANNELS);
+    lines.push(`未登录：${shown.join("、")}${signedOut.length > shown.length ? " 等" : ""}`);
+  }
+  if (signedIn.length === 0) {
+    lines.push("当前只有免密免费池可用；登录任意渠道后会出现该渠道的模型");
+    lines.push("用 /ourfreemodel-login 打开管理页面登录");
   }
   return lines;
 }
@@ -161,7 +203,7 @@ export function registerOurFreeModelCommands(pi, runtime) {
           lines.push(`本机模型：${runtime.models.length} 个`);
         }
       }
-      lines.push(...describeChannels(runtime.service.handle));
+      lines.push(...(await describeChannels(runtime.service.handle)));
       const text = lines.join("\n");
       ctx?.ui?.notify?.(text, "info");
       console.log(text);
