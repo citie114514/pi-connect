@@ -19,8 +19,9 @@
   "files": [
     "index.js",
     "service.js",
-    "test-ourfreemodel.cjs",
-    "README.md"
+    "vendor/ofm/**",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "pi": {
     "extensions": [

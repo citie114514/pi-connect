@@ -26,7 +26,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 /**
  * Select the request transport inside Our Free Model before it starts.
@@ -81,12 +81,16 @@ function applyTransportDefault(env) {
 }
 
 /**
- * Where an installed Our Free Model might live, most specific first.
+ * Where an *external* Our Free Model install might live, most specific first.
  *
- * A caller-set `PI_OURFREEMODEL_PATH` wins outright: the package is normally a
- * sibling of this checkout during development and a subdirectory of the DSH
- * profile once installed, and neither is something a published extension can
- * guess reliably on every machine.
+ * The vendored copy inside this package is the default (see
+ * {@link resolveOurFreeModelEntry}); these locations exist for the other
+ * direction — a user who already runs Our Free Model and would rather Pi follow
+ * *their* version than the bundled one. An absent external install is therefore
+ * not an error.
+ *
+ * `PI_OURFREEMODEL_PATH` outranks everything: development and pinning both need
+ * an override that does not require editing the package.
  */
 export function candidateRoots(env = process.env, home = homedir()) {
   const roots = [];
@@ -101,70 +105,95 @@ export function candidateRoots(env = process.env, home = homedir()) {
 }
 
 /**
+ * The service bundled inside this package.
+ *
+ * Resolved from this module's own URL, never from `process.cwd()`: Pi loads
+ * extensions out of `~/.pi/agent/extensions/`, where the working directory is
+ * whatever the user happened to be sitting in and has nothing to do with the
+ * package's own layout.
+ */
+export function vendoredRoot() {
+  return fileURLToPath(new URL("./vendor/ofm", import.meta.url));
+}
+
+/** Read one candidate's manifest and confirm it carries the standalone entry. */
+function readServiceEntry(root, source) {
+  if (!existsSync(root)) return undefined;
+  const manifest = join(root, "package.json");
+  if (!existsSync(manifest)) return undefined;
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(manifest, "utf8"));
+  } catch {
+    return undefined;
+  }
+  // `main` is the DSH/Cordis entry. The standalone one is separate on purpose
+  // and is what carries no host dependency; a package old enough to lack it
+  // cannot be driven from Pi at all.
+  const entry = join(root, "packages", "standalone", "service.mjs");
+  if (!existsSync(entry)) return undefined;
+  return { entry, root, version: String(pkg.version ?? "unknown"), source };
+}
+
+/**
  * Resolve the standalone service entry point.
  *
- * Returns `{ entry, root, version }` on success, or `{ reason }` describing the
- * first thing that was wrong. The reason is deliberately specific — "OFM is not
- * installed" and "OFM is installed but predates the standalone entry point"
- * call for completely different user action.
+ * Order: an explicit `PI_OURFREEMODEL_PATH`, then the copy bundled in this
+ * package, then any external install. The bundle comes first so the extension
+ * works on a machine that has installed nothing — that is the point of
+ * vendoring. Returns `{ entry, root, version, source }` or `{ reason }`.
  *
- * @returns {{ entry: string, root: string, version: string } | { reason: string }}
+ * @returns {{ entry: string, root: string, version: string, source: "vendored" | "external" } | { reason: string }}
  */
 export function resolveOurFreeModelEntry(env = process.env, home = homedir()) {
   const tried = [];
+  const explicit = String(env.PI_OURFREEMODEL_PATH ?? "").trim();
+  if (explicit !== "") {
+    const resolved = readServiceEntry(resolvePath(explicit), "external");
+    if (resolved !== undefined) return resolved;
+    tried.push(`${explicit} (PI_OURFREEMODEL_PATH is set but has no packages/standalone/service.mjs)`);
+  } else {
+    const bundled = vendoredRoot();
+    const resolved = readServiceEntry(bundled, "vendored");
+    if (resolved !== undefined) return resolved;
+    tried.push(`${bundled} (the copy bundled with this package is unusable)`);
+  }
   for (const root of candidateRoots(env, home)) {
-    const manifest = join(root, "package.json");
-    if (!existsSync(manifest)) {
-      tried.push(`${root} (no package.json)`);
-      continue;
-    }
-    let pkg;
-    try {
-      pkg = JSON.parse(readFileSync(manifest, "utf8"));
-    } catch (error) {
-      tried.push(`${root} (package.json is not valid JSON: ${error.message})`);
-      continue;
-    }
-    // `main` is the DSH/Cordis entry. The standalone one is separate on
-    // purpose and is what carries no host dependency; a package old enough to
-    // lack it cannot be driven from Pi at all.
-    const entry = join(root, "packages", "standalone", "service.mjs");
-    if (!existsSync(entry)) {
-      tried.push(`${root} (v${pkg.version ?? "?"} has no packages/standalone/service.mjs)`);
-      continue;
-    }
-    return { entry, root, version: String(pkg.version ?? "unknown") };
+    if (explicit !== "" && root === resolvePath(explicit)) continue;
+    const resolved = readServiceEntry(root, "external");
+    if (resolved !== undefined) return resolved;
+    tried.push(root);
   }
   return {
     reason:
-      tried.length === 0
-        ? "dsh-our-free-model was not found; set PI_OURFREEMODEL_PATH to its directory"
-        : `dsh-our-free-model was not found in any known location (${tried.join("; ")}); set PI_OURFREEMODEL_PATH to its directory`,
+      `Our Free Model 服务不可用：本包自带的副本缺失，也没有找到可用的外部安装。` +
+      `试过：${tried.join("; ")}。请重装本包。`,
   };
 }
 
 /**
- * Where Our Free Model keeps its own data (credentials, account pool, key).
+ * Where Our Free Model keeps its data (credentials, account pool, key).
  *
- * This defaults to **Our Free Model's own home**, so a user who also runs
- * `npm run start:standalone` shares one account pool instead of silently
- * getting a second, empty one — and so the channels they signed in through the
- * management page are the channels Pi uses.
+ * Defaults to a **Pi-specific** directory, not Our Free Model's own home.
  *
- * The catch is the service's lock: one data dir admits exactly one running
- * instance, and the lock file records only a pid, not a port, so a second
- * process cannot attach to the first. Pi therefore has to outlive the
- * contention by failing politely rather than by starting a rival. Callers who
- * want Pi to keep its own instance (for example to run alongside a standalone
- * one) point `PI_OURFREEMODEL_DATA_DIR` at a separate directory, and that is
- * documented as the supported way rather than papered over here.
+ * The reason is the service's lock: one data dir admits exactly one running
+ * instance, and the lock file records only a pid — not a port — so a second
+ * process cannot attach to the first. Sharing `~/.our-free-model` with a
+ * separately launched standalone service therefore does not share the account
+ * pool; it makes Pi fail outright whenever that service is running, which is
+ * the opposite of working out of the box. A user who *does* want one shared
+ * pool points `PI_OURFREEMODEL_DATA_DIR` at Our Free Model's directory and
+ * accepts that the two cannot run at once — an explicit choice, not a default.
+ *
+ * `OFM_HOME` is honoured next because a user who set it has already declared
+ * where they want Our Free Model's state to live.
  */
 export function resolveDataDir(env = process.env, home = homedir()) {
   const override = String(env.PI_OURFREEMODEL_DATA_DIR ?? "").trim();
   if (override !== "") return resolvePath(override);
   const ofmHome = String(env.OFM_HOME ?? "").trim();
   if (ofmHome !== "") return resolvePath(ofmHome);
-  return join(home, ".our-free-model");
+  return join(home, ".pi", "agent", "cache", "pi-connect-ourfreemodel", "ofm-data");
 }
 
 /**

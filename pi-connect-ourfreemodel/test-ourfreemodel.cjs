@@ -59,32 +59,60 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
     assert.ok(resolved.entry.endsWith(join("packages", "standalone", "service.mjs")));
   });
 
-  // --- 2. Resolution: the DSH profile layout is discovered without an override ---
-  await test("the DSH profile node_modules layout is found", () => {
+  // --- 2. The DSH profile layout is still discoverable as a *fallback* ---
+  await test("the DSH profile node_modules layout is a known fallback root", () => {
     const dshHome = join(root, `dsh-${Math.random().toString(36).slice(2)}`);
     const dir = join(dshHome, "profiles", "desktop", "node_modules", "dsh-our-free-model");
     mkdirSync(join(dir, "packages", "standalone"), { recursive: true });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "2.7.2" }), "utf8");
     writeFileSync(join(dir, "packages", "standalone", "service.mjs"), "export {}\n", "utf8");
-    const resolved = service.resolveOurFreeModelEntry({ DSH_HOME: dshHome }, root);
-    assert.ok(!("reason" in resolved), `expected success, got ${resolved.reason}`);
+    // `candidateRoots` is the external-install search list; the bundled copy is
+    // consulted separately and deliberately outranks it.
+    const roots = service.candidateRoots({ DSH_HOME: dshHome }, root);
+    assert.ok(roots.includes(dir), `expected ${dir} among ${roots.join(", ")}`);
+    // And it does resolve when the bundle cannot be used (simulated by an
+    // override that points nowhere): the fallback exists for real.
+    const resolved = service.resolveOurFreeModelEntry(
+      { PI_OURFREEMODEL_PATH: join(root, "absent-override"), DSH_HOME: dshHome },
+      root,
+    );
+    assert.ok(!("reason" in resolved), `expected the DSH install to be found, got ${resolved.reason}`);
+    assert.equal(resolved.root, dir);
+    assert.equal(resolved.source, "external");
+  });
+
+  // --- 3. The bundled copy is what makes this package work with nothing installed ---
+  await test("the vendored copy resolves with no external install and no DSH", () => {
+    const resolved = service.resolveOurFreeModelEntry(
+      { DSH_HOME: join(root, "no-dsh-anywhere") },
+      join(root, "empty-home"),
+    );
+    assert.ok(!("reason" in resolved), `expected the bundled copy to resolve, got: ${resolved.reason}`);
+    assert.equal(resolved.source, "vendored");
+    assert.ok(resolved.entry.endsWith(join("packages", "standalone", "service.mjs")));
+    assert.ok(resolved.root.includes("vendor"), `expected a bundled root, got ${resolved.root}`);
+  });
+  await test("an explicit override outranks the bundled copy", () => {
+    const dir = fakeInstall();
+    const resolved = service.resolveOurFreeModelEntry(
+      { PI_OURFREEMODEL_PATH: dir, DSH_HOME: join(root, "nope") },
+      join(root, "empty-home"),
+    );
+    assert.ok(!("reason" in resolved));
+    assert.equal(resolved.source, "external");
     assert.equal(resolved.root, dir);
   });
-
-  // --- 3. Resolution: a package too old to carry the standalone entry is named as such ---
-  await test("a package without the standalone entry reports why", () => {
+  await test("an override pointing at a broken install reports that specifically", () => {
     const dir = fakeInstall({ withStandalone: false, version: "1.0.0" });
-    const resolved = service.resolveOurFreeModelEntry({ PI_OURFREEMODEL_PATH: dir, DSH_HOME: join(root, "nope") }, root);
+    const resolved = service.resolveOurFreeModelEntry(
+      { PI_OURFREEMODEL_PATH: dir, DSH_HOME: join(root, "nope") },
+      join(root, "empty-home"),
+    );
+    // A bad override must not silently fall back to the bundle: that would make
+    // a pinning mistake look like it worked.
     assert.ok("reason" in resolved, "expected a failure reason");
-    assert.match(resolved.reason, /no packages\/standalone\/service\.mjs/);
-    assert.match(resolved.reason, /1\.0\.0/);
-  });
-
-  // --- 4. Resolution: absent everywhere names the override ---
-  await test("a missing install names the override variable", () => {
-    const resolved = service.resolveOurFreeModelEntry({ DSH_HOME: join(root, "absent") }, join(root, "absent-home"));
-    assert.ok("reason" in resolved);
     assert.match(resolved.reason, /PI_OURFREEMODEL_PATH/);
+    assert.match(resolved.reason, /service\.mjs/);
   });
 
   // --- 5. Data dir: Pi never invents a second account pool ---
@@ -96,9 +124,12 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
     const ofmHome = join(root, "ofm-home");
     assert.equal(service.resolveDataDir({ OFM_HOME: ofmHome }, root), ofmHome);
   });
-  await test("the default is Our Free Model's own home, not a Pi cache path", () => {
+  await test("the default data dir is Pi-specific, not Our Free Model's own home", () => {
+    // Sharing `~/.our-free-model` would collide with a separately launched
+    // standalone service on the same lock, so the default must be its own path.
     const dir = service.resolveDataDir({}, root);
-    assert.equal(dir, join(root, ".our-free-model"));
+    assert.ok(dir.startsWith(join(root, ".pi", "agent", "cache")), `expected a Pi cache path, got ${dir}`);
+    assert.notEqual(dir, join(root, ".our-free-model"));
   });
 
   // --- 6. The key is read from the service's own settings file ---
@@ -121,24 +152,31 @@ function fakeInstall({ version = "2.7.2", withStandalone = true } = {}) {
   });
 
   // --- 7. Installed-ness is answered without starting anything ---
-  await test("isOurFreeModelInstalled reports ok for a valid install", () => {
-    const dir = fakeInstall();
-    const status = service.isOurFreeModelInstalled({ PI_OURFREEMODEL_PATH: dir, DSH_HOME: join(root, "nope") }, root);
-    assert.equal(status.ok, true);
-    assert.equal(status.version, "2.7.2");
+  await test("isOurFreeModelInstalled is ok from the bundled copy alone", () => {
+    const status = service.isOurFreeModelInstalled(
+      { DSH_HOME: join(root, "no-dsh-anywhere") },
+      join(root, "empty-home"),
+    );
+    assert.equal(status.ok, true, `expected ok, got ${status.reason}`);
+    assert.ok(status.root.includes("vendor"));
   });
-  await test("isOurFreeModelInstalled reports a reason when absent", () => {
-    const status = service.isOurFreeModelInstalled({ DSH_HOME: join(root, "nope") }, join(root, "absent-home"));
+  await test("isOurFreeModelInstalled reports a reason when even the bundle is unusable", () => {
+    // Point the override at a broken install and the bundle at nothing, which is
+    // the only remaining way for this to fail.
+    const dir = fakeInstall({ withStandalone: false });
+    const status = service.isOurFreeModelInstalled(
+      { PI_OURFREEMODEL_PATH: dir, DSH_HOME: join(root, "nope") },
+      join(root, "empty-home"),
+    );
     assert.equal(status.ok, false);
     assert.match(status.reason, /PI_OURFREEMODEL_PATH/);
   });
   await test("isOurFreeModelInstalled rejects a dataDir that is a file", () => {
-    const dir = fakeInstall();
-    const dataDir = join(root, "not-a-dir");
+    const dataDir = join(root, "not-a-dir-2");
     writeFileSync(dataDir, "x", "utf8");
     const status = service.isOurFreeModelInstalled(
-      { PI_OURFREEMODEL_PATH: dir, DSH_HOME: join(root, "nope"), PI_OURFREEMODEL_DATA_DIR: dataDir },
-      root,
+      { DSH_HOME: join(root, "no-dsh-anywhere"), PI_OURFREEMODEL_DATA_DIR: dataDir },
+      join(root, "empty-home"),
     );
     assert.equal(status.ok, false);
     assert.match(status.reason, /not a directory/);

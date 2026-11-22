@@ -7,7 +7,7 @@
 | `@eghrhegpe/dsh-connect-qoder` v0.3.2 | `qoder-cn`、`qoder` | 国内版 / 国际版 Qoder 并行 |
 | `dsh-connect-trae` v2.3.1 | `trae`、`trae-global` | 国内版 / 国际版 Trae 并行 |
 | —（本仓库自有） | `free-*` | Kilo 免密池 + 复用 Qoder/TRAE 登录态 |
-| `dsh-our-free-model` v2.7.2 | `ourfree` | 托管它的 standalone 服务，10 个账号渠道与免费池全部经由此接入 |
+| `dsh-our-free-model` v2.7.2 | `ourfree` | 自带其 standalone 服务副本，10 个账号渠道与免费池全部经由此接入；开箱即用，无需装 DSH |
 
 本仓库（`pi-connect`）是一个 npm workspaces 单仓库，产出四个可发布到 npm 的 Pi 扩展包
 （`@citie114514/pi-connect-qoder`、`@citie114514/pi-connect-trae`、
@@ -66,10 +66,12 @@ pi-connect/                            (仓库根：npm workspaces)
 │     └─ providers/       各渠道实现（kilo/qoder/trae）
 ├─ pi-connect-ourfreemodel/
 │  ├─ index.js            Pi 扩展入口（注册单个 ourfree provider）
-│  ├─ service.js          定位并托管 dsh-our-free-model 的 standalone 服务
+│  ├─ service.js          定位并托管随包附带的 standalone 服务
+│  ├─ vendor/ofm/         Our Free Model 服务的随包副本（102 文件 / 5.3 MiB，MIT）
 │  ├─ package.json        npm 包元数据 + pi.extensions
 │  ├─ README.md           包说明（薄适配层设计、锁与数据目录、Bun 传输）
-│  └─ test-ourfreemodel.cjs   离线回归（28 项断言，不出网）
+│  ├─ THIRD_PARTY_NOTICES.md  上游 MIT 归属
+│  └─ test-ourfreemodel.cjs   离线回归（29 项断言，不出网）
 ├─ cyrene/ide-account-bridge/    昔涟（Cyrene）宿主版（见下方说明）
 │  ├─ src/entry.js         插件入口：register / unregister / open，IPC + 三个 Agent 工具
 │  ├─ src/endpoints.js     回环端点持久化（端口 + bearer token，跨重启稳定）
