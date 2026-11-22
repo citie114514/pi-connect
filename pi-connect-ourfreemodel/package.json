@@ -1,0 +1,45 @@
+{
+  "name": "@citie114514/pi-connect-ourfreemodel",
+  "version": "0.1.0",
+  "displayName": "Pi Connect Our Free Model",
+  "description": "把 dsh-our-free-model 的免费/已登录账号渠道接进 Pi coding agent：由本包托管它的本地 OpenAI 兼容服务，Pi 侧只注册一个指向该服务的 provider，渠道、登录、账号池与积分都由原实现负责。",
+  "type": "module",
+  "license": "MIT",
+  "author": "citie114514",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "our-free-model",
+    "free-models"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "files": [
+    "index.js",
+    "service.js",
+    "test-ourfreemodel.cjs",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/citie114514/pi-connect.git",
+    "directory": "pi-connect-ourfreemodel"
+  },
+  "homepage": "https://github.com/citie114514/pi-connect/tree/main/pi-connect-ourfreemodel#readme",
+  "bugs": {
+    "url": "https://github.com/citie114514/pi-connect/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

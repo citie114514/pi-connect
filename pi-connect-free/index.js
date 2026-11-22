@@ -39,7 +39,6 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 
 import { loadProviders, providerById, EXCLUDED_CHANNELS } from './src/registry.js'
 import { FreeModelError, KIND } from './src/providers/types.js'
-import { registerFreeCommands } from './commands.js'
 
 /** Prefix every registered provider id carries, so the picker groups them. */
 const ID_PREFIX = 'free-'
@@ -421,11 +420,6 @@ export default async function activate(pi) {
     logger.error('no free-model channel could be loaded')
     return
   }
-  registerAuth(providers)
-  registerFreeCommands(pi, LOGIN, LOGOUT, (id) => {
-    const channel = providers.find((candidate) => candidate.id === id)
-    return channel?.name ?? id
-  })
 
   const shims = new Map()
   for (const channel of providers) {
@@ -475,43 +469,6 @@ export default async function activate(pi) {
   pi.on?.('session_shutdown', async () => {
     await Promise.all([...shims.values()].map((shim) => shim.close()))
   })
-}
-
-/**
- * The sign-in functions this package exposes, keyed by channel id.
- *
- * A channel that ships its own `login()` is reachable through this map; a
- * channel whose credential comes from another app (Qoder, TRAE) has none and is
- * absent, rather than offered as a button that could only fail.
- *
- * @type {Map<string, (options: {onPrompt?: (arg: any) => void, signal?: AbortSignal}) => Promise<object>>}
- */
-export const LOGIN = new Map()
-
-/** The matching sign-out functions. */
-export const LOGOUT = new Map()
-
-/** Forget one channel's stored sign-in, if it owns one. */
-export async function logout(channelId) {
-  const signOut = LOGOUT.get(channelId)
-  if (signOut === undefined) return false
-  await signOut()
-  return true
-}
-
-/**
- * Register the sign-in/logout entry points for every channel that has them.
- *
- * Called from `activate`, so the maps are populated exactly once per process and
- * only with channels that actually loaded.
- *
- * @param {import('./src/providers/types.js').Provider[]} providers
- */
-export function registerAuth(providers) {
-  for (const channel of providers) {
-    if (typeof channel.login === 'function') LOGIN.set(channel.id, channel.login)
-    if (typeof channel.logout === 'function') LOGOUT.set(channel.id, channel.logout)
-  }
 }
 
 export { EXCLUDED_CHANNELS }

@@ -13,7 +13,8 @@
   "workspaces": [
     "pi-connect-qoder",
     "pi-connect-trae",
-    "pi-connect-free"
+    "pi-connect-free",
+    "pi-connect-ourfreemodel"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -23,8 +24,10 @@
     "pack:qoder": "npm pack -w @citie114514/pi-connect-qoder --pack-destination dist",
     "pack:trae": "npm pack -w @citie114514/pi-connect-trae --pack-destination dist",
     "pack:free": "npm pack -w @citie114514/pi-connect-free --pack-destination dist",
+    "pack:ourfreemodel": "npm pack -w @citie114514/pi-connect-ourfreemodel --pack-destination dist",
     "publish:qoder": "npm publish -w @citie114514/pi-connect-qoder --access public",
     "publish:trae": "npm publish -w @citie114514/pi-connect-trae --access public",
-    "publish:free": "npm publish -w @citie114514/pi-connect-free --access public"
+    "publish:free": "npm publish -w @citie114514/pi-connect-free --access public",
+    "publish:ourfreemodel": "npm publish -w @citie114514/pi-connect-ourfreemodel --access public"
   }
 }

@@ -1,17 +1,17 @@
 # Pi Connect — Qoder / Trae / 免费模型 for Pi
 
-把 DeepSeek Harness 的两个插件移植为 **Pi coding agent** 扩展，直接生效可用；
-另有一个包把本机已登录账号与上游公开免密池一起接入。
+把 DeepSeek Harness 的插件移植为 **Pi coding agent** 扩展，直接生效可用。
 
-| 上游插件 | Pi provider | 说明 |
+| 上游 | Pi provider | 说明 |
 | --- | --- | --- |
 | `@eghrhegpe/dsh-connect-qoder` v0.3.2 | `qoder-cn`、`qoder` | 国内版 / 国际版 Qoder 并行 |
 | `dsh-connect-trae` v2.3.1 | `trae`、`trae-global` | 国内版 / 国际版 Trae 并行 |
-| —（本仓库自有） | `free-*` | 免费 / 已登录渠道：Kilo、Cline、MiniMax、LobsterAI、CodeArts、Raccoon，以及复用 Qoder/TRAE 登录态 |
+| —（本仓库自有） | `free-*` | Kilo 免密池 + 复用 Qoder/TRAE 登录态 |
+| `dsh-our-free-model` v2.7.2 | `ourfree` | 托管它的 standalone 服务，10 个账号渠道与免费池全部经由此接入 |
 
-本仓库（`pi-connect`）是一个 npm workspaces 单仓库，产出三个可发布到 npm 的 Pi 扩展包
+本仓库（`pi-connect`）是一个 npm workspaces 单仓库，产出四个可发布到 npm 的 Pi 扩展包
 （`@citie114514/pi-connect-qoder`、`@citie114514/pi-connect-trae`、
-`@citie114514/pi-connect-free`）。
+`@citie114514/pi-connect-free`、`@citie114514/pi-connect-ourfreemodel`）。
 
 
 ## 工作原理
@@ -56,17 +56,20 @@ pi-connect/                            (仓库根：npm workspaces)
 │  ├─ THIRD_PARTY_NOTICES.md  上游 MIT 归属
 │  └─ lib/trae-core.js    从 DSH bundle 手术提取的协议核心
 ├─ pi-connect-free/
-│  ├─ index.js            Pi 扩展入口（注册 free-* 十个 provider）
-│  ├─ commands.js         /free-login、/free-logout、/free-status
+│  ├─ index.js            Pi 扩展入口（注册 free-kilo / free-qoder-* / free-trae-* 五个 provider）
 │  ├─ package.json        npm 包元数据 + pi.extensions
 │  ├─ README.md           包说明（含各渠道验证程度）
-│  ├─ test-free.cjs       离线回归（54 项断言，不出网）
+│  ├─ test-free.cjs       离线回归（不出网）
 │  └─ src/
-│     ├─ registry.js      渠道注册表 + 刻意排除的渠道及理由
-│     ├─ device-login.js  通用 OAuth 设备码 + PKCE
-│     ├─ credential-store.js  凭据持久化（0600 原子写）
+│     ├─ registry.js      渠道注册表
 │     ├─ http.js          超时、错误分类、SSE 解析
-│     └─ providers/       各渠道实现（kilo/cline/minimax/lobsterai/raccoon/codearts/qoder/trae）
+│     └─ providers/       各渠道实现（kilo/qoder/trae）
+├─ pi-connect-ourfreemodel/
+│  ├─ index.js            Pi 扩展入口（注册单个 ourfree provider）
+│  ├─ service.js          定位并托管 dsh-our-free-model 的 standalone 服务
+│  ├─ package.json        npm 包元数据 + pi.extensions
+│  ├─ README.md           包说明（薄适配层设计、锁与数据目录、Bun 传输）
+│  └─ test-ourfreemodel.cjs   离线回归（28 项断言，不出网）
 ├─ cyrene/ide-account-bridge/    昔涟（Cyrene）宿主版（见下方说明）
 │  ├─ src/entry.js         插件入口：register / unregister / open，IPC + 三个 Agent 工具
 │  ├─ src/endpoints.js     回环端点持久化（端口 + bearer token，跨重启稳定）
