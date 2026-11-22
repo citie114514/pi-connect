@@ -1,0 +1,19 @@
+{
+  "name": "our-free-model-vendored",
+  "version": "2.7.2",
+  "private": true,
+  "type": "module",
+  "description": "Vendored subset of dsh-our-free-model's standalone local service — the files its own scripts/pack-standalone.mjs manifest lists, minus the DSH plugin entry. Bundled so pi-connect-ourfreemodel works with no external install.",
+  "main": "./packages/standalone/service.mjs",
+  "vendoredFrom": {
+    "package": "dsh-our-free-model",
+    "version": "2.7.2",
+    "upstream": "https://github.com/Ebony-Vinyl/dsh-our-free-model",
+    "manifest": "scripts/pack-standalone.mjs — standaloneSourceFiles()",
+    "license": "MIT"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT"
+}
