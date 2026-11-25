@@ -62,8 +62,20 @@ const DATA_POLICY = 'disagree'
  */
 export const QUEUE_WAIT_BUDGET_MS = 120000
 
-/** Longest single sleep, so one absurd hint cannot stall a turn indefinitely. */
-export const QUEUE_WAIT_MAX_SLEEP_MS = 30000
+/**
+ * Longest single sleep, so one absurd hint cannot stall a turn indefinitely.
+ *
+ * This has to be at least as long as the hint the gateway actually gives, or
+ * the ladder defeats itself: Qoder answers a queued request with
+ * `retryAfterSeconds: 60`, and a 30 s ceiling turned each 60 s wait into two
+ * 30 s polls — re-submitting the request twice as often as the server asked,
+ * which is exactly the pressure that keeps a queue from draining. Measured
+ * 2026-11-11: the gateway kept answering `queueType: p4, queueCount: 1,
+ * retryAfterSeconds: 60` for 25 minutes of polling; the official client waits
+ * the full hint before re-sending. The ceiling stays finite so a bogus hint
+ * (an hour, say) cannot pin the turn forever.
+ */
+export const QUEUE_WAIT_MAX_SLEEP_MS = 60000
 
 /** Sleep before the first retry when the gateway gives no hint at all. */
 export const QUEUE_WAIT_MIN_SLEEP_MS = 1000
@@ -1125,7 +1137,37 @@ export async function* streamChat(region, credential, request, signal) {
   }
 
   const url = chatUrl(region)
-  const bodyBytes = encodeBody(Buffer.from(JSON.stringify(body)))
+
+  /**
+   * Encode one attempt's body.
+   *
+   * Every attempt gets its own `request_id` and `business.id`, while
+   * `request_set_id` / `chat_record_id` stay fixed for the turn: those two name
+   * the *turn*, `request_id` names one *submission* of it.
+   *
+   * This used to be a single `bodyBytes` computed once and reused for every
+   * retry, which meant a queued turn resent a byte-identical duplicate of a
+   * request the gateway had already parked. The queue answer never changed, so
+   * the caller could wait out its whole budget and watch the host retry with
+   * the same duplicate again.
+   *
+   * `is_retry` stays `false` on purpose. Rotating the id already makes each
+   * attempt a distinct submission, which is the property that matters; claiming
+   * "this is a retry of record X" while presenting a fresh id is a claim the
+   * gateway may validate, and there is no way to verify its handling of that
+   * flag without reproducing a queue. `business.begin_at` keeps the turn's
+   * original start for the same reason the set id does: this is one turn.
+   */
+  const bodyFor = () =>
+    encodeBody(
+      Buffer.from(
+        JSON.stringify({
+          ...body,
+          request_id: crypto.randomUUID(),
+          business: { ...body.business, id: crypto.randomUUID() },
+        }),
+      ),
+    )
 
   /**
    * Open one attempt and hand back its frame stream.
@@ -1207,7 +1249,7 @@ export async function* streamChat(region, credential, request, signal) {
   }
 
   /** Send one request. Throws for terminal failures, returns the open stream. */
-  async function openAttempt() {
+  async function openAttempt(bodyBytes) {
     let response
     // Build headers outside the try so that a programming error (e.g.
     // `credential` is undefined) throws directly rather than being caught
@@ -1328,7 +1370,7 @@ export async function* streamChat(region, credential, request, signal) {
     // attempt could spend unbounded time without ever exhausting it.
     const attemptStartedAt = Date.now()
     try {
-      stream = readFrames(await openAttempt())
+      stream = readFrames(await openAttempt(bodyFor()))
       // Pull the first frame before committing to a response, so a queue
       // rejection surfaces here rather than mid-stream where it could not be
       // retried without duplicating output.
@@ -1395,12 +1437,17 @@ class QueueRejection extends Error {
  * How long to wait before retrying a queue rejection, or `undefined` when it is
  * not a queue rejection or the wait budget is spent.
  *
- * The gateway's own `retryAfterSeconds` is the primary signal and is honoured
- * as given. It is not always accurate, though: a queue that keeps answering
- * "retry in 2s" for a minute would otherwise be polled every two seconds for the
- * whole budget, which is both rude and pointless. So once a few consecutive
- * rejections have shown the hint is not converging, the pause escalates
- * geometrically up to {@link QUEUE_WAIT_MAX_SLEEP_MS}.
+ * The gateway's own `retryAfterSeconds` is a **floor**, never a target to
+ * undercut. Re-submitting early is what keeps a queue occupied: measured
+ * 2026-11-11, the gateway kept answering `queueType: p4, retryAfterSeconds: 60`
+ * for 25 minutes of polling, and the old shape multiplied that hint by
+ * 0.75..1.25 — so roughly half of every retry fired before the server's own
+ * deadline. Jitter and escalation may only push the pause LONGER.
+ *
+ * A queue that keeps answering "retry in 2s" would otherwise be polled every
+ * two seconds for the whole budget, which is both rude and pointless. So once a
+ * few consecutive rejections have shown the hint is not converging, the pause
+ * escalates geometrically up to {@link QUEUE_WAIT_MAX_SLEEP_MS}.
  *
  * @param error - the rejection to judge.
  * @param waitedMs - time already spent waiting in this turn.
@@ -1426,7 +1473,7 @@ export function queueWaitFor(error, waitedMs, attempt) {
       ? QUEUE_WAIT_MIN_SLEEP_MS * 2 ** Math.min(attempt - GRACE_ATTEMPTS, 8)
       : 0
 
-  const target = Math.max(hinted, escalated) * (0.75 + Math.random() * 0.5)
+  const target = Math.max(hinted, escalated) * (1 + Math.random() * 0.15)
   // Clamp the target into [MIN, MAX] FIRST, then cap it at `remaining`.
   // The old shape — `Math.max(MIN, Math.min(target, MAX, remaining))` — put the
   // floor OUTSIDE the cap, so once the budget dropped below MIN_SLEEP the
@@ -1435,6 +1482,14 @@ export function queueWaitFor(error, waitedMs, attempt) {
   // full 1000 ms). The floor belongs to the retry policy, not to the budget;
   // a sub-second last sleep is cheap and buys one more real attempt.
   const clamped = Math.max(QUEUE_WAIT_MIN_SLEEP_MS, Math.min(target, QUEUE_WAIT_MAX_SLEEP_MS))
+  // A wait SHORTER than the hint is worse than no wait at all when the gateway
+  // named a deadline: re-submitting before it is exactly what keeps a queued
+  // request queued. So when the remaining budget cannot cover the hint the turn
+  // ends here and the host retries with a fresh, honest attempt instead of us
+  // burning the last seconds on a doomed submission.
+  // A hintless failure (transport blip) still gets the partial sleep — there
+  // is no server deadline to undercut, and one more real attempt is worth it.
+  if (hinted > 0 && remaining < hinted) return undefined
   return Math.min(clamped, remaining)
 }
 

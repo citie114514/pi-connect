@@ -1091,13 +1091,34 @@ var TraeCredentialStore = class {
 	*/
 	async readAll() {
 		const { credentials: desktop } = await this.readDesktopAll();
-		const credentials = [...desktop.filter((credential) => this.matchesRegion(credential))];
-		for (const own of await this.readOwns()) {
-			if (!this.matchesRegion(own)) continue;
-			if (credentials.some((credential) => traeAccountId(credential) === traeAccountId(own))) continue;
-			credentials.push(own);
-		}
-		return credentials;
+		// One entry per account, keeping the copy that expires LAST.
+		//
+		// The two copies are not interchangeable: Trae's own storage.json is
+		// only written on sign-in, while the plugin-owned copy is written on
+		// every refresh — and the SOLO refresh contract ROTATES the refresh
+		// token, so each refresh invalidates the copy left in storage.json.
+		// Re-using that dead token answers 401 / code 20101, which the request
+		// path surfaces as a throw and the host's availability check used to
+		// swallow into "not signed in" — i.e. the provider vanishing from the
+		// model list.
+		//
+		// Ordering by access-token expiry is what the DSH bundle's own
+		// `readAll` does. A tie means neither copy has been written since the
+		// other, so no rotation happened and both refresh tokens are the
+		// original — the incumbent is as good as the challenger.
+		// Observed 2026-11-10: TRAE SOLO CN's storage.json (last written
+		// 2026-10-12) failed while the plugin's own copy answered 200 on the
+		// same host and client id.
+		const byAccount = new Map();
+		const consider = (credential) => {
+			if (!this.matchesRegion(credential)) return;
+			const id = traeAccountId(credential);
+			const incumbent = byAccount.get(id);
+			if (incumbent === void 0 || credential.expiresAtMs > incumbent.expiresAtMs) byAccount.set(id, credential);
+		};
+		for (const credential of desktop) consider(credential);
+		for (const own of await this.readOwns()) consider(own);
+		return [...byAccount.values()];
 	}
 	/**
 	* Which paths were tried and why each one failed. Read-only and token-free:
@@ -1232,7 +1253,13 @@ const REFRESH_CONTRACT = {
 	},
 	solo: {
 		path: "/cloudide/api/v3/trae/oauth/ExchangeToken",
-		clientId: "ono9krqynydwx5",
+		// Verified 2026-10-12 against a live TRAE SOLO CN install: the SOLO
+		// refresh token is bound to the SOLO client id, not the IDE's. Sending
+		// `ono9krqynydwx5` (the CN/SG IDE id) is rejected with 400 / code 10101
+		// "refresh token is not matched to the client", which surfaces as the
+		// provider disappearing from the model list. With `en1oxy7wnw8j9n` the
+		// same host+path answers 200 and returns a token.
+		clientId: "en1oxy7wnw8j9n",
 		deviceInfo: false
 	},
 	"solo-sg": {
