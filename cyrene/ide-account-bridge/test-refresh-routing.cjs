@@ -393,7 +393,11 @@ const directoryResponse = (...names) => ({
     }
     await stack.refreshCatalog()
     check('部分目录已可用', () => assert.strictEqual(stack.catalog.current().length, 1))
-    check('部分成功未标记就绪', () => assert.strictEqual(stack.modelsReady, false))
+    // A non-empty partial answer IS a usable directory — it must mark itself
+    // ready, or every later request pays another multi-function discovery while
+    // one function keeps failing. "Not settled" is `modelsComplete`'s job.
+    check('部分成功标记为就绪（可服务，不阻塞后续请求）', () => assert.strictEqual(stack.modelsReady, true))
+    check('部分成功不标记为完整', () => assert.strictEqual(stack.modelsComplete, false))
     check('部分成功记录了失败时间', () => assert.notStrictEqual(stack.modelsFailedAt, 0))
 
     const realNow = Date.now
@@ -564,9 +568,11 @@ const directoryResponse = (...names) => ({
 
     await stack.refreshCatalog({ force: true })   // complete
     check('完整发现后 modelsReady 为 true', () => assert.strictEqual(stack.modelsReady, true))
+    check('完整发现后 modelsComplete 为 true', () => assert.strictEqual(stack.modelsComplete, true))
 
     await stack.refreshCatalog({ force: true })   // partial
-    check('部分结果不把 modelsReady 撤销', () => assert.strictEqual(stack.modelsReady, true))
+    check('部分结果保持 modelsReady（可服务）', () => assert.strictEqual(stack.modelsReady, true))
+    check('部分结果把 modelsComplete 置 false', () => assert.strictEqual(stack.modelsComplete, false))
     check('部分结果记录了失败时间戳', () => assert.ok(stack.modelsFailedAt > 0))
 
     // The TTL is far from expiring (the successful timestamp is recent), so
@@ -577,6 +583,57 @@ const directoryResponse = (...names) => ({
     await stack.refreshCatalog()                   // not forced
     check('退避到期后非强制刷新会重试', () => assert.ok(calls > before, `calls 仍为 ${before}`))
     check('重试补齐了缺失的模型', () => {
+      const ids = stack.catalog.current().map((m) => m.id)
+      assert.deepStrictEqual(ids.sort(), ['a', 'b'])
+    })
+  }
+
+  // -----------------------------------------------------------------
+  console.log('\n[10] 冷启动持续只拿到部分目录时，后续请求不得被反复阻塞')
+
+  {
+    // One Trae function permanently failing must not turn every request into a
+    // multi-function discovery wait (up to 30s each). A non-empty partial answer
+    // is a usable directory: mark it ready, keep it un-complete, retry on the
+    // backoff — do not make requests pay the discovery again.
+    const { RegionStack } = await import('./src/trae/runtime.js')
+    const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
+    stack.ensureShim = async () => ({})
+    let discovers = 0
+    stack.discoverModels = async () => {
+      discovers += 1
+      return {
+        models: [{ id: 'a', name: 'A' }],
+        wire: new Map([['a', { configName: 'a', function: 'f' }]]),
+        complete: false,
+        failures: ['function b permanently failing'],
+      }
+    }
+
+    await stack.refreshCatalog()
+    check('首个部分结果也把 modelsReady 置 true', () => assert.strictEqual(stack.modelsReady, true))
+    check('首个部分结果不置 modelsComplete', () => assert.strictEqual(stack.modelsComplete, false))
+
+    // Backdate past the backoff, then a plain request must NOT block on a fresh
+    // discovery — the shim's gate reads modelsReady, which is now true.
+    stack.modelsFailedAt = Date.now() - 61_000
+    const before = discovers
+    await stack.refreshCatalog()
+    check('退避到期确实重试了一次', () => assert.strictEqual(discovers, before + 1))
+    check('重试后 modelsReady 仍为 true（请求不会被再次阻塞）', () =>
+      assert.strictEqual(stack.modelsReady, true))
+
+    // And a partial result followed by a full one clears the gap flag.
+    stack.discoverModels = async () => ({
+      models: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }],
+      wire: new Map([['a', { configName: 'a', function: 'f' }], ['b', { configName: 'b', function: 'f' }]]),
+      complete: true,
+      failures: [],
+    })
+    stack.modelsFailedAt = Date.now() - 61_000
+    await stack.refreshCatalog()
+    check('补齐后 modelsComplete 转 true', () => assert.strictEqual(stack.modelsComplete, true))
+    check('补齐后目录含缺失模型', () => {
       const ids = stack.catalog.current().map((m) => m.id)
       assert.deepStrictEqual(ids.sort(), ['a', 'b'])
     })

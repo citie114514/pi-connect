@@ -221,28 +221,27 @@ class RegionStack {
             );
             return false;
           }
-          // Only a full, non-empty answer replaces the directory as "fresh". A
-          // partial one is still applied (those models are callable), but it
-          // must not be recorded as a completed discovery:
+          // A non-empty answer — partial or complete — is a usable directory:
+          // those models can be called and their wire entries resolve. Land it
+          // and mark readiness, because `modelsReady` answers "may a request
+          // proceed", not "is the directory perfect".
           //
-          //  - `modelsComplete` goes false, so `refreshCatalog`'s freshness
-          //    guard stops treating this directory as settled — otherwise a
-          //    forced refresh inside the TTL window would leave the previous
-          //    successful `modelsDiscoveredAt` in place, the partial union would
-          //    look fresh for the rest of the window, and the models the failed
-          //    function serves would go un-retried until it expired; and
-          //  - `modelsDiscoveredAt` is not advanced, for the same reason.
+          // Leaving `modelsReady` false on a partial result would make every
+          // later request wait for a discovery that may keep failing partially.
+          // Measured consequence: with one function permanently failing, each
+          // request paid a full multi-function discovery (up to 30s each)
+          // before answering — strictly worse than serving the models we have.
           //
-          // `modelsFailedAt` arms the retry: once the backoff expires the next
-          // request runs a fresh discovery, which fills in the missing models.
-          // `modelsReady` is intentionally left alone — a `false` there would
-          // make every request wait on a discovery that may keep failing
-          // partially, blocking the models we do have.
+          // What the partial result must NOT do is look *settled*:
+          // `modelsComplete` goes false and `modelsDiscoveredAt` is left alone,
+          // so `refreshCatalog` keeps scheduling the retry that fills in the
+          // models the failed function serves. `modelsFailedAt` arms the 60s
+          // backoff so that retry does not run on every single request.
           this.applyDirectory(outcome.models, outcome.wire);
+          this.modelsReady = true;
           if (outcome.complete) {
             this.modelsDiscoveredAt = Date.now();
             this.modelsFailedAt = 0;
-            this.modelsReady = true;
             this.modelsComplete = true;
           } else {
             this.modelsFailedAt = Date.now();
