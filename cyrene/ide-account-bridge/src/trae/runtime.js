@@ -74,6 +74,20 @@ class RegionStack {
      * landed yet, so the next request started a duplicate one.
      */
     this.modelsReady = false;
+    /**
+     * Whether the landed directory is the *complete* answer.
+     *
+     * A partial result (one of Trae's directory functions failed) is still
+     * applied — those models are callable — but it must not be treated as a
+     * finished discovery. Kept separate from `modelsReady` because they answer
+     * different questions: `modelsReady` is "can a request be served at all",
+     * while this is "is anything still missing". Collapsing them would either
+     * block every request on a half directory (if partial left `modelsReady`
+     * false) or retire a known-gap directory for a whole TTL (if it set it
+     * true), and the second is what let the models a failed function serves go
+     * un-retried until the window expired.
+     */
+    this.modelsComplete = false;
     /** The in-flight discovery, shared by callers that arrive during it. */
     this.modelsPending = undefined;
     /** When the last discovery attempt failed; drives the retry backoff. */
@@ -142,6 +156,16 @@ class RegionStack {
       // Lets a request refresh the directory, mirroring what the Pi port does
       // from `auth.apiKey.resolve()`.
       refreshCatalog: () => this.refreshCatalog(),
+      // Whether live discovery has completed at least once.
+      //
+      // The shim must not use `catalog.current().length > 0` for this: the
+      // catalog is seeded with the static fallback at construction, so that
+      // length is non-zero before any upstream call. Waiting on it would mean
+      // never waiting — a cold-start request would then be answered with
+      // fallback ids, and a chat request could reach `TraeSoloBridge` with an
+      // empty wire map, which upstream rejects as `4001 param is invalid`.
+      // `modelsReady` is the flag that actually tracks a completed discovery.
+      discoveryReady: () => this.modelsReady,
       // Absent on the Pi port, which keeps its original random-per-process
       // behaviour.
       ...this.endpoints === undefined
@@ -197,17 +221,32 @@ class RegionStack {
             );
             return false;
           }
-          // Only a full, non-empty answer replaces the directory. A partial one
-          // is still applied (those models are callable), but the timestamp is
-          // deliberately not advanced, so the next request retries and can pick
-          // up the models the failed function serves.
+          // Only a full, non-empty answer replaces the directory as "fresh". A
+          // partial one is still applied (those models are callable), but it
+          // must not be recorded as a completed discovery:
+          //
+          //  - `modelsComplete` goes false, so `refreshCatalog`'s freshness
+          //    guard stops treating this directory as settled — otherwise a
+          //    forced refresh inside the TTL window would leave the previous
+          //    successful `modelsDiscoveredAt` in place, the partial union would
+          //    look fresh for the rest of the window, and the models the failed
+          //    function serves would go un-retried until it expired; and
+          //  - `modelsDiscoveredAt` is not advanced, for the same reason.
+          //
+          // `modelsFailedAt` arms the retry: once the backoff expires the next
+          // request runs a fresh discovery, which fills in the missing models.
+          // `modelsReady` is intentionally left alone — a `false` there would
+          // make every request wait on a discovery that may keep failing
+          // partially, blocking the models we do have.
           this.applyDirectory(outcome.models, outcome.wire);
           if (outcome.complete) {
             this.modelsDiscoveredAt = Date.now();
             this.modelsFailedAt = 0;
             this.modelsReady = true;
+            this.modelsComplete = true;
           } else {
             this.modelsFailedAt = Date.now();
+            this.modelsComplete = false;
             this.logger?.warn?.(
               `trae: model directory for ${this.region} is incomplete; serving it but retrying on the next request`,
               outcome.failures,
@@ -284,12 +323,17 @@ class RegionStack {
     // `modelsDiscoveredAt` is still 0 and every concurrent caller would
     // otherwise look stale and fire its own fetch.
     if (this.modelsPending !== undefined) return this.modelsPending;
-    // Fresh: nothing to do. Checked after the in-flight case so a run that has
-    // already landed is never mistaken for one still owed.
-    if (!force && this.modelsReady && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) return null;
-    // A discovery just failed; the last good directory serves the request, so
-    // do not hammer the upstream on every request. A forced refresh (the
-    // panel's button) skips the backoff deliberately.
+    // Fresh and complete: nothing to do. Both halves matter. A directory that
+    // is complete but old is stale, and one that is recent but incomplete is
+    // still missing whatever a failed directory function serves — treating the
+    // second as fresh is what retired a known-gap directory for a whole TTL
+    // after a forced refresh landed a partial union.
+    if (!force && this.modelsReady && this.modelsComplete && Date.now() - this.modelsDiscoveredAt < CATALOG_TTL_MS) {
+      return null;
+    }
+    // A discovery just failed or came back incomplete; the last good directory
+    // serves the request, so do not hammer the upstream on every request. A
+    // forced refresh (the panel's button) skips the backoff deliberately.
     if (!force && Date.now() - this.modelsFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return null;
     // Ask `ensureReady` to rediscover without touching `modelsReady`: that flag
     // means "a directory has landed", and a failed refresh must not revoke it —

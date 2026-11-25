@@ -1652,15 +1652,25 @@ function createTraeShim(options) {
 			// Keep the model directory current, the way the Pi port does from
 			// `auth.apiKey.resolve()`. TTL-gated, so it is a no-op for every
 			// request inside the window. The request only WAITS for the discovery
-			// while there is no directory to serve from — the catalog is seeded
-			// with the static fallback, so "has models" is the right question
-			// (and the same one the Qoder shim asks). Once a directory exists, a
-			// stale rediscovery runs in the background: the chat route must never
-			// block up to 30s per directory function on an upstream the cache can
-			// already answer for. A failure inside either path is swallowed and
-			// the last good directory is served.
+			// while no live directory has landed yet.
+			//
+			// The question must NOT be `catalog.current().length > 0`: the catalog
+			// is seeded with the static fallback at construction, so it is
+			// non-empty before any upstream call. Gating on it would mean the
+			// first request never waits — it would be answered with fallback ids,
+			// and a chat request could reach the bridge with an empty wire map,
+			// which upstream rejects as `4001 param is invalid`. `discoveryReady`
+			// is the host's "a live discovery completed" signal, which is the
+			// property this wait is actually about. It is optional so the Pi port,
+			// which has no such flag, keeps its original behaviour.
+			//
+			// Once a live directory exists, a stale rediscovery runs in the
+			// background: the chat route must never block up to 30s per directory
+			// function on an upstream the cache can already answer for. A failure
+			// inside either path is swallowed and the last good directory is
+			// served.
 			if (catalogRoute && typeof refreshCatalog === "function") {
-				const haveModels = options.catalog.current().length > 0;
+				const haveModels = typeof options.discoveryReady === "function" ? options.discoveryReady() : options.catalog.current().length > 0;
 				const refreshed = (async () => {
 					try {
 						return await refreshCatalog();

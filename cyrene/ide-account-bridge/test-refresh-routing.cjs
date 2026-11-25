@@ -465,6 +465,123 @@ const directoryResponse = (...names) => ({
     })
   }
 
+  // -----------------------------------------------------------------
+  console.log('\n[8] 冷启动：静态 fallback 目录不等于「已发现」，首个请求必须等待')
+
+  {
+    // The catalog is non-empty from construction (static fallback), so the old
+    // `catalog.current().length > 0` gate never waited. A cold-start request
+    // then got fallback ids back, and a chat request could reach the bridge
+    // with an empty wire map (upstream 4001).
+    let release
+    const gate = new Promise((r) => { release = r })
+    let entered = 0
+    let discoveryReady = false
+    const shim = createTraeShim({
+      catalog: { current: () => [{ id: 'fallback-model', name: 'fallback-model' }] },
+      client: { chatStream: async () => ({ ok: true, response: null }) },
+      logger: { warn() {}, info() {}, error() {} },
+      wire: { resolved: false },
+      discoveryReady: () => discoveryReady,
+      refreshCatalog: async () => {
+        entered += 1
+        await gate
+        discoveryReady = true
+      },
+      secret: 'test-secret',
+      preferredPort: 0,
+    })
+    await shim.ready
+
+    const auth = { Authorization: 'Bearer test-secret' }
+    let settled = false
+    const pending = fetch(`${shim.baseUrl()}/v1/models`, { headers: auth }).then((res) => {
+      settled = true
+      void res.body?.cancel?.()
+      return res
+    })
+    // Give it a moment: with the old gate this resolved immediately.
+    await new Promise((r) => setTimeout(r, 300))
+    check('目录未就绪时 /v1/models 保持挂起（等待发现）', () => assert.strictEqual(settled, false, '请求已被 fallback 目录放行'))
+    check('首次发现确实被触发', () => assert.ok(entered >= 1, `entered=${entered}`))
+    release()
+    const res = await pending
+    check('发现完成后请求正常返回', () => assert.strictEqual(res.status, 200))
+    await shim.close()
+  }
+
+  {
+    // Once discovery has completed, a later stale refresh must not block the
+    // request again — the whole point of the background refresh.
+    let release
+    const gate = new Promise((r) => { release = r })
+    const shim = createTraeShim({
+      catalog: { current: () => [{ id: 'm1', name: 'm1' }] },
+      client: { chatStream: async () => ({ ok: true, response: null }) },
+      logger: { warn() {}, info() {}, error() {} },
+      wire: { resolved: true },
+      discoveryReady: () => true,
+      refreshCatalog: async () => { await gate },
+      secret: 'test-secret',
+      preferredPort: 0,
+    })
+    await shim.ready
+    const started = Date.now()
+    const res = await fetch(`${shim.baseUrl()}/v1/models`, { headers: { Authorization: 'Bearer test-secret' } })
+    void res.body?.cancel?.()
+    check('已发现过的目录不阻塞后续请求', () =>
+      assert.ok(Date.now() - started < 2000, `耗时 ${Date.now() - started} ms`))
+    release()
+    await shim.close()
+  }
+
+  // -----------------------------------------------------------------
+  console.log('\n[9] 强制刷新得到部分目录后必须可重试，不能被新鲜度短路')
+
+  {
+    const { RegionStack } = await import('./src/trae/runtime.js')
+    const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
+    stack.ensureShim = async () => ({})
+    let calls = 0
+    // First discovery: complete. Then a forced refresh: partial (one function
+    // failed). Then a plain request: must retry, not return at the fresh guard.
+    stack.discoverModels = async () => {
+      calls += 1
+      if (calls === 1) return okOutcome([{ id: 'a', name: 'A' }], new Map([['a', { configName: 'a', function: 'f' }]]))
+      if (calls === 2) {
+        return {
+          models: [{ id: 'a', name: 'A' }],
+          wire: new Map([['a', { configName: 'a', function: 'f' }]]),
+          complete: false,
+          failures: ['function b failed'],
+        }
+      }
+      return okOutcome(
+        [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }],
+        new Map([['a', { configName: 'a', function: 'f' }], ['b', { configName: 'b', function: 'f' }]]),
+      )
+    }
+
+    await stack.refreshCatalog({ force: true })   // complete
+    check('完整发现后 modelsReady 为 true', () => assert.strictEqual(stack.modelsReady, true))
+
+    await stack.refreshCatalog({ force: true })   // partial
+    check('部分结果不把 modelsReady 撤销', () => assert.strictEqual(stack.modelsReady, true))
+    check('部分结果记录了失败时间戳', () => assert.ok(stack.modelsFailedAt > 0))
+
+    // The TTL is far from expiring (the successful timestamp is recent), so
+    // only the failure backoff can allow this retry. Backdate it past the
+    // backoff to model "60 s later".
+    stack.modelsFailedAt = Date.now() - 61_000
+    const before = calls
+    await stack.refreshCatalog()                   // not forced
+    check('退避到期后非强制刷新会重试', () => assert.ok(calls > before, `calls 仍为 ${before}`))
+    check('重试补齐了缺失的模型', () => {
+      const ids = stack.catalog.current().map((m) => m.id)
+      assert.deepStrictEqual(ids.sort(), ['a', 'b'])
+    })
+  }
+
   console.log(`\n${failures === 0 ? 'PASS  刷新路由与目录完整性符合预期' : `FAIL  ${failures} 项断言失败`}`)
   process.exit(failures === 0 ? 0 : 1)
 })().catch((error) => {
