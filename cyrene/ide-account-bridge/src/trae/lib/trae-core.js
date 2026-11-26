@@ -1680,6 +1680,15 @@ function createTraeShim(options) {
 					}
 				})();
 				if (!haveModels) await refreshed;
+				// A wait that ended without a usable directory must not fall through
+				// to the static fallback: its ids are not callable (the wire map is
+				// empty, so upstream answers 4001) and a 200 listing them is a lie.
+				// Answer with a retryable error instead, so the client retries after
+				// the backoff rather than pinning the failure on a fake model list.
+				const serviceable = typeof options.hasServiceableDirectory === "function" ? options.hasServiceableDirectory() : options.catalog.current().length > 0;
+				if (!serviceable) {
+					return writeError(res, 503, "model_directory_unavailable", "Trae model directory is not available yet; retry shortly");
+				}
 			}
 			if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) return writeJson(res, 200, { ok: true });
 			if (req.method === "GET" && (url === "/v1/models" || url === "/v1/models/")) return writeJson(res, 200, {

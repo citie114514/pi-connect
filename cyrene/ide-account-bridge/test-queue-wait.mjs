@@ -122,6 +122,31 @@ const queued = (seconds) => ({ retryable: true, retryAfterSeconds: seconds });
   check("late-attempt escalation respects floor and ceiling", bad === 0, `${bad} out-of-range waits`);
 }
 
+// --- 9. A hint longer than one sleep may take must not be shortened ---
+{
+  // The gateway's `retryAfterSeconds` is a floor. Sleeping the ceiling and
+  // re-submitting early is exactly the polling that keeps a queue occupied, so
+  // a hint above the ceiling has to end the turn rather than be clamped.
+  for (const seconds of [61, 90, 120, 600]) {
+    const wait = queueWaitFor(queued(seconds), 0, 1);
+    check(
+      `a ${seconds}s hint (above the ${QUEUE_WAIT_MAX_SLEEP_MS / 1000}s ceiling) ends the turn`,
+      wait === undefined,
+      `returned ${wait}; it would re-submit before the gateway's deadline`,
+    );
+  }
+  // Exactly at the ceiling is still honourable.
+  const atCeiling = queueWaitFor(queued(QUEUE_WAIT_MAX_SLEEP_MS / 1000), 0, 1);
+  check(
+    "a hint exactly at the ceiling still waits",
+    typeof atCeiling === "number" && atCeiling >= QUEUE_WAIT_MAX_SLEEP_MS,
+    `got ${atCeiling}`,
+  );
+  // And a hint below it is unaffected.
+  const below = queueWaitFor(queued(10), 0, 1);
+  check("a hint below the ceiling is unaffected", typeof below === "number" && below >= 10_000, `got ${below}`);
+}
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failure(s):`);
   for (const failure of failures) console.error(`  ✗ ${failure}`);

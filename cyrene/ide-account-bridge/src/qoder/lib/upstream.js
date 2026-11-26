@@ -1474,6 +1474,16 @@ export function queueWaitFor(error, waitedMs, attempt) {
       : 0
 
   const target = Math.max(hinted, escalated) * (1 + Math.random() * 0.15)
+  // The hint is a FLOOR. A ceiling smaller than the hint cannot be honoured by
+  // sleeping less — that is exactly the early re-submission this whole ladder
+  // exists to avoid. So when the gateway asks for longer than one sleep may
+  // take, end the turn instead: the host then retries with a fresh attempt,
+  // and the gateway sees a request no earlier than it asked for.
+  //
+  // The parser accepts any positive `retryAfterSeconds` / `Retry-After`, so
+  // without this an upstream asking for 90s would be polled at 60s, and 120s
+  // at 60s again — repeated queue rejections that only add gateway pressure.
+  if (hinted > QUEUE_WAIT_MAX_SLEEP_MS) return undefined
   // Clamp the target into [MIN, MAX] FIRST, then cap it at `remaining`.
   // The old shape — `Math.max(MIN, Math.min(target, MAX, remaining))` — put the
   // floor OUTSIDE the cap, so once the budget dropped below MIN_SLEEP the

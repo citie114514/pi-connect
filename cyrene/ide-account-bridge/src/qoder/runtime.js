@@ -166,10 +166,22 @@ class RegionRuntime {
     // Checked before freshness: a run already in the air has not landed yet, so
     // its caller must join it rather than be told "already fresh".
     if (this.catalogPending !== undefined) return this.catalogPending;
-    if (!force && this.catalog.fresh()) return;
-    // The last good catalog serves the request, so a fetch that just failed
-    // must not be retried on every subsequent request.
-    if (!force && Date.now() - this.catalogFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return;
+    // A recorded failure changes what "fresh" means.
+    //
+    // `catalog.fresh()` looks only at `fetchedAt`, which a failed attempt never
+    // touches — so after a failed forced refresh inside the TTL it still says
+    // "fresh", and a freshness-first check would suppress the retry for the
+    // rest of the window: new models, or a switched account, stay invisible for
+    // up to 30 minutes after one transient error.
+    //
+    // So a pending failure outranks freshness:
+    //   - inside the 60s backoff: do nothing (the last good catalog serves);
+    //   - after it: retry, regardless of how recent `fetchedAt` is.
+    if (!force && this.catalogFailedAt !== 0) {
+      if (Date.now() - this.catalogFailedAt < CATALOG_RETRY_AFTER_FAILURE_MS) return;
+    } else if (!force && this.catalog.fresh()) {
+      return;
+    }
     const flight = this.fetchCatalog(signal).finally(() => {
       // Only the flight that still owns the slot may release it, so a late
       // finisher cannot clear a newer run's promise.
@@ -187,9 +199,31 @@ class RegionRuntime {
     // until its token died. A catalog refresh is the natural re-read point, and
     // the TTL plus the failure backoff below are what keep the cost bounded —
     // it is never per-request.
-    this.credentials.invalidate();
-    const credential = await this.resolveCredential();
-    if (credential === undefined) return;
+    this.credentials.invalidate()
+    // Credential resolution runs before the try below, so a failure here used
+    // to escape without recording `catalogFailedAt`: every request during an
+    // expired directory (or a forced refresh) would re-run PAT exchange or the
+    // DPAPI helper, bypassing the backoff and amplifying load on a credential
+    // service that is already failing. Treat it as a fetch failure.
+    let credential
+    try {
+      credential = await this.resolveCredential()
+    } catch (error) {
+      this.catalogFailedAt = Date.now()
+      this.logger?.warn?.(
+        `dsh-connect-qoder[pi]: ${this.region.displayName} credential resolution failed; serving cached catalog`,
+        error,
+      )
+      return
+    }
+    if (credential === undefined) {
+      // "No credential" is a durable state, not a transient error, and it is
+      // the normal answer for a signed-out region. It must NOT arm the backoff:
+      // the user can sign in at any moment, and the next request should pick
+      // that up immediately rather than wait out a retry window meant for a
+      // failing upstream.
+      return
+    }
     try {
       const raw = await fetchModels(this.region, credential, signal);
       const entries = raw.map(normalizeEntry);

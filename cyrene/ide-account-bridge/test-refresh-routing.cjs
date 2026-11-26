@@ -639,6 +639,148 @@ const directoryResponse = (...names) => ({
     })
   }
 
+  // -----------------------------------------------------------------
+  console.log('\n[11] 冷启动全部来源失败时不得以兜底目录应答')
+
+  {
+    // The catalog is seeded with static fallback models whose ids are not
+    // callable (empty wire map → upstream 4001). A failed cold-start discovery
+    // must surface as a retryable error, not a 200 listing those ids.
+    let release
+    const gate = new Promise((r) => { release = r })
+    let ready = false
+    const shim = createTraeShim({
+      catalog: { current: () => [{ id: 'fallback-model', name: 'fallback-model' }] },
+      client: { chatStream: async () => ({ ok: true, response: null }) },
+      logger: { warn() {}, info() {}, error() {} },
+      wire: { resolved: false },
+      discoveryReady: () => ready,
+      hasServiceableDirectory: () => ready,
+      refreshCatalog: async () => { await gate /* discovery fails; nothing lands */ },
+      secret: 'test-secret',
+      preferredPort: 0,
+    })
+    await shim.ready
+    const pending = fetch(`${shim.baseUrl()}/v1/models`, { headers: { Authorization: 'Bearer test-secret' } })
+    await new Promise((r) => setTimeout(r, 100))
+    release()
+    const res = await pending
+    void res.body?.cancel?.()
+    check('全部失败时返回 503 而不是兜底模型列表', () => assert.strictEqual(res.status, 503))
+  }
+
+  {
+    // Once a live directory has landed, a later failed refresh must keep
+    // serving it (503 only applies when nothing was ever usable).
+    let ready = true
+    const shim = createTraeShim({
+      catalog: { current: () => [{ id: 'm1', name: 'm1' }] },
+      client: { chatStream: async () => ({ ok: true, response: null }) },
+      logger: { warn() {}, info() {}, error() {} },
+      wire: { resolved: true },
+      discoveryReady: () => ready,
+      hasServiceableDirectory: () => ready,
+      refreshCatalog: async () => {},
+      secret: 'test-secret',
+      preferredPort: 0,
+    })
+    await shim.ready
+    const res = await fetch(`${shim.baseUrl()}/v1/models`, { headers: { Authorization: 'Bearer test-secret' } })
+    const body = await res.json().catch(() => ({}))
+    check('已有目录时正常返回 200', () => assert.strictEqual(res.status, 200))
+    check('已有目录时列出的是真实模型', () => assert.strictEqual(body.data?.[0]?.id, 'm1'))
+  }
+
+  // -----------------------------------------------------------------
+  console.log('\n[12] 强制刷新失败后，退避到期必须能重试（Trae）')
+
+  {
+    const { RegionStack } = await import('./src/trae/runtime.js')
+    const stack = new RegionStack('cn', { warn() {} }, undefined, undefined, 0)
+    stack.ensureShim = async () => ({})
+    let mode = 'complete'
+    let calls = 0
+    stack.discoverModels = async () => {
+      calls += 1
+      if (mode === 'fail') return { models: [], wire: new Map(), complete: false, failures: ['all failed'] }
+      return { models: [{ id: 'a', name: 'A' }], wire: new Map([['a', { configName: 'a', function: 'f' }]]), complete: true, failures: [] }
+    }
+
+    await stack.refreshCatalog({ force: true })          // complete
+    check('完整目录后 modelsComplete 为 true', () => assert.strictEqual(stack.modelsComplete, true))
+
+    mode = 'fail'
+    await stack.refreshCatalog({ force: true })          // forced refresh, all sources fail
+    check('强制刷新全失败后 modelsComplete 转 false', () => assert.strictEqual(stack.modelsComplete, false))
+    check('强制刷新全失败后旧目录仍可服务', () => assert.strictEqual(stack.modelsReady, true))
+
+    // Inside the TTL, only the backoff may allow the retry.
+    stack.modelsFailedAt = Date.now() - 61_000
+    const before = calls
+    await stack.refreshCatalog()
+    check('退避到期后非强制刷新会重试', () => assert.ok(calls > before, `calls 仍为 ${before}`))
+  }
+
+  // -----------------------------------------------------------------
+  console.log('\n[13] Qoder：强制刷新失败后不受 TTL 短路；凭据解析抛错纳入退避')
+
+  {
+    const { RegionRuntime } = await import('./src/qoder/runtime.js')
+    const makeRuntime = () => {
+      const rt = new RegionRuntime({ id: 'qoder-cn', displayName: 'Qoder CN' }, { warn() {} }, process.cwd(), undefined, 0)
+      const state = { resolves: 0, fresh: true }
+      rt.catalog = { fresh: () => state.fresh, current: () => [], replace: () => {} }
+      return { rt, state }
+    }
+
+    // (a) A forced refresh that fails must not leave the TTL guard in charge.
+    {
+      const { rt, state } = makeRuntime()
+      state.fresh = true // pretend a successful fetch landed moments ago
+      let failing = true
+      rt.resolveCredential = async () => {
+        state.resolves += 1
+        if (failing) throw new Error('credential service down')
+        // Valid credential: the flow now proceeds past resolution, which is
+        // what this assertion is about. The upstream call itself fails (no
+        // network in a unit test) and is handled inside `fetchCatalog`.
+        return { token: 't', userID: 'u' }
+      }
+      await rt.refreshCatalog(undefined, { force: true })
+      check('凭据解析抛错记为失败', () => assert.notStrictEqual(rt.catalogFailedAt, 0))
+      // Backdate past the backoff: the retry must happen even though the TTL
+      // still reports "fresh".
+      rt.catalogFailedAt = Date.now() - 61_000
+      failing = false
+      const before = state.resolves
+      await rt.refreshCatalog()
+      check('TTL 仍新鲜时失败退避到期仍会重试', () => assert.ok(state.resolves > before, `resolves 仍为 ${before}`))
+    }
+
+    // (b) Credential resolution failure is inside the backoff, not outside it.
+    {
+      const { rt, state } = makeRuntime()
+      state.fresh = false
+      rt.resolveCredential = async () => { state.resolves += 1; throw new Error('boom') }
+      await rt.refreshCatalog()
+      const after1 = state.resolves
+      await rt.refreshCatalog()   // immediately again
+      check('凭据解析失败后 60 秒内不重复尝试', () => assert.strictEqual(state.resolves, after1, `多试了 ${state.resolves - after1} 次`))
+    }
+
+    // (c) A signed-out region (undefined credential) must NOT arm the backoff —
+    // signing in has to take effect on the next request.
+    {
+      const { rt, state } = makeRuntime()
+      state.fresh = false
+      rt.resolveCredential = async () => { state.resolves += 1; return undefined }
+      await rt.refreshCatalog()
+      const after1 = state.resolves
+      await rt.refreshCatalog()
+      check('未登录不会占住退避（登录后立即生效）', () => assert.strictEqual(state.resolves, after1 + 1, '第二次没有重新尝试'))
+    }
+  }
+
   console.log(`\n${failures === 0 ? 'PASS  刷新路由与目录完整性符合预期' : `FAIL  ${failures} 项断言失败`}`)
   process.exit(failures === 0 ? 0 : 1)
 })().catch((error) => {
